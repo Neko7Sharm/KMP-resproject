@@ -7,7 +7,7 @@ import {
   Save, RefreshCw, ZoomIn, ZoomOut, RotateCcw, Database,
   ChevronDown, Plus, Trash2, X, Image, Info, Eye, Check,
   ArrowRight, Package, History, Sparkles, Zap, Camera, Video,
-  Grid, List, Maximize2, Minimize2, Smartphone, Focus
+  Grid, List, Maximize2, Minimize2, Smartphone, Focus, ClipboardPaste
 } from 'lucide-react';
 import { useScan, StockRow, ScanResult } from '@/context/ScanContext';
 import { optimizeImageForOCR } from '@/lib/imageOptimizer';
@@ -173,6 +173,60 @@ export default function ScanPage() {
     const file = e.dataTransfer.files?.[0];
     if (file) processFile(file, true);
   };
+
+  // ── Clipboard Paste Handling (Ctrl+V and Button) ──
+  const handlePasteFromClipboard = useCallback(async () => {
+    try {
+      if (typeof navigator === 'undefined' || !navigator.clipboard?.read) {
+        setErrorMsg('เบราว์เซอร์ไม่รองรับการอ่านคลิปบอร์ดโดยตรง กรุณากดปุ่มลัด Ctrl + V เพื่อวางภาพ');
+        return;
+      }
+      const clipboardItems = await navigator.clipboard.read();
+      for (const item of clipboardItems) {
+        const imageType = item.types.find(t => t.startsWith('image/'));
+        if (imageType) {
+          const blob = await item.getType(imageType);
+          const file = new File([blob], `clipboard_${Date.now()}.png`, { type: imageType });
+          processFile(file, true);
+          return;
+        }
+      }
+      setErrorMsg('ไม่พบไฟล์รูปภาพในคลิปบอร์ด กรุณาคัดลอกภาพก่อน (เช่น Snipping Tool, Win + Shift + S หรือคัดลอกรูปภาพ)');
+    } catch (err: any) {
+      console.warn('Clipboard read error:', err);
+      setErrorMsg('ไม่สามารถอ่านคลิปบอร์ดได้: กรุณาอนุญาตสิทธิ์เข้าถึงคลิปบอร์ด หรือกดปุ่ม Ctrl + V บนแป้นพิมพ์เพื่อวางภาพ');
+    }
+  }, [processFile, setErrorMsg]);
+
+  // Global window paste listener for Ctrl+V / Cmd+V
+  useEffect(() => {
+    const handleGlobalPaste = (e: ClipboardEvent) => {
+      const activeEl = document.activeElement;
+      const isInput =
+        activeEl instanceof HTMLInputElement ||
+        activeEl instanceof HTMLTextAreaElement ||
+        (activeEl as HTMLElement)?.isContentEditable;
+
+      // ถ้ากำลังพิมพ์ในกล่อง input ให้ยกเว้น ยกเว้นว่าในคลิปบอร์ดเป็นไฟล์ภาพจริงๆ
+      const items = e.clipboardData?.items;
+      if (!items) return;
+
+      for (let i = 0; i < items.length; i++) {
+        const item = items[i];
+        if (item.type.startsWith('image/')) {
+          const file = item.getAsFile();
+          if (file) {
+            e.preventDefault();
+            processFile(file, true);
+            break;
+          }
+        }
+      }
+    };
+
+    window.addEventListener('paste', handleGlobalPaste);
+    return () => window.removeEventListener('paste', handleGlobalPaste);
+  }, [processFile]);
 
   // Stop webcam stream cleanly
   const stopWebcam = useCallback(() => {
@@ -726,20 +780,20 @@ export default function ScanPage() {
                 </p>
               </div>
 
-              {/* 3 Quick Action Buttons */}
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+              {/* 4 Quick Action Buttons */}
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
                 {/* 1. Native Mobile Camera */}
                 <button
                   type="button"
                   onClick={() => cameraInputRef.current?.click()}
-                  className="group p-4 rounded-2xl bg-gradient-to-br from-purple-600 to-indigo-700 hover:from-purple-700 hover:to-indigo-800 text-white shadow-md shadow-purple-200 flex flex-col items-center justify-center text-center gap-2 transition active:scale-98"
+                  className="group p-3.5 sm:p-4 rounded-2xl bg-gradient-to-br from-purple-600 to-indigo-700 hover:from-purple-700 hover:to-indigo-800 text-white shadow-md shadow-purple-200 flex flex-col items-center justify-center text-center gap-2 transition active:scale-98"
                 >
-                  <div className="w-12 h-12 rounded-xl bg-white/20 flex items-center justify-center group-hover:scale-110 transition">
-                    <Camera className="w-6 h-6 text-white" />
+                  <div className="w-11 h-11 sm:w-12 sm:h-12 rounded-xl bg-white/20 flex items-center justify-center group-hover:scale-110 transition">
+                    <Camera className="w-5 h-5 sm:w-6 sm:h-6 text-white" />
                   </div>
                   <div>
-                    <span className="text-sm font-bold block leading-tight">ถ่ายด้วยกล้อง</span>
-                    <span className="text-[11px] text-purple-100 block mt-0.5">กล้องหลังสมาร์ตโฟน HD</span>
+                    <span className="text-xs sm:text-sm font-bold block leading-tight">ถ่ายด้วยกล้อง</span>
+                    <span className="text-[10px] sm:text-[11px] text-purple-100 block mt-0.5">กล้องมือถือ HD</span>
                   </div>
                 </button>
 
@@ -747,14 +801,14 @@ export default function ScanPage() {
                 <button
                   type="button"
                   onClick={() => startWebcam('environment')}
-                  className="group p-4 rounded-2xl bg-white border-2 border-indigo-200 hover:border-indigo-400 hover:bg-indigo-50/50 text-slate-800 shadow-xs flex flex-col items-center justify-center text-center gap-2 transition active:scale-98"
+                  className="group p-3.5 sm:p-4 rounded-2xl bg-white border-2 border-indigo-200 hover:border-indigo-400 hover:bg-indigo-50/50 text-slate-800 shadow-xs flex flex-col items-center justify-center text-center gap-2 transition active:scale-98"
                 >
-                  <div className="w-12 h-12 rounded-xl bg-indigo-100 flex items-center justify-center group-hover:scale-110 transition">
-                    <Focus className="w-6 h-6 text-indigo-600" />
+                  <div className="w-11 h-11 sm:w-12 sm:h-12 rounded-xl bg-indigo-100 flex items-center justify-center group-hover:scale-110 transition">
+                    <Focus className="w-5 h-5 sm:w-6 sm:h-6 text-indigo-600" />
                   </div>
                   <div>
-                    <span className="text-sm font-bold block leading-tight text-indigo-900">เปิดกล้องสดในเว็บ</span>
-                    <span className="text-[11px] text-slate-500 block mt-0.5">มีกรอบช่วยเล็งเอกสาร</span>
+                    <span className="text-xs sm:text-sm font-bold block leading-tight text-indigo-900">เปิดกล้องสดในเว็บ</span>
+                    <span className="text-[10px] sm:text-[11px] text-slate-500 block mt-0.5">เล็งด้วยกรอบเอกสาร</span>
                   </div>
                 </button>
 
@@ -762,14 +816,29 @@ export default function ScanPage() {
                 <button
                   type="button"
                   onClick={() => fileInputRef.current?.click()}
-                  className="group p-4 rounded-2xl bg-slate-50 hover:bg-slate-100 border border-slate-200 text-slate-800 flex flex-col items-center justify-center text-center gap-2 transition active:scale-98"
+                  className="group p-3.5 sm:p-4 rounded-2xl bg-slate-50 hover:bg-slate-100 border border-slate-200 text-slate-800 flex flex-col items-center justify-center text-center gap-2 transition active:scale-98"
                 >
-                  <div className="w-12 h-12 rounded-xl bg-slate-200 flex items-center justify-center group-hover:scale-110 transition">
-                    <Image className="w-6 h-6 text-slate-700" />
+                  <div className="w-11 h-11 sm:w-12 sm:h-12 rounded-xl bg-slate-200 flex items-center justify-center group-hover:scale-110 transition">
+                    <Image className="w-5 h-5 sm:w-6 sm:h-6 text-slate-700" />
                   </div>
                   <div>
-                    <span className="text-sm font-bold block leading-tight">เลือกรูปจากเครื่อง</span>
-                    <span className="text-[11px] text-slate-500 block mt-0.5">คลังภาพ / อัลบั้ม / ไฟล์</span>
+                    <span className="text-xs sm:text-sm font-bold block leading-tight">เลือกรูปจากเครื่อง</span>
+                    <span className="text-[10px] sm:text-[11px] text-slate-500 block mt-0.5">คลังภาพ / ไฟล์</span>
+                  </div>
+                </button>
+
+                {/* 4. Paste from Clipboard */}
+                <button
+                  type="button"
+                  onClick={handlePasteFromClipboard}
+                  className="group p-3.5 sm:p-4 rounded-2xl bg-gradient-to-br from-amber-50 to-orange-50 hover:from-amber-100 hover:to-orange-100 border-2 border-amber-200 hover:border-amber-300 text-slate-800 shadow-xs flex flex-col items-center justify-center text-center gap-2 transition active:scale-98"
+                >
+                  <div className="w-11 h-11 sm:w-12 sm:h-12 rounded-xl bg-amber-200/80 flex items-center justify-center group-hover:scale-110 transition">
+                    <ClipboardPaste className="w-5 h-5 sm:w-6 sm:h-6 text-amber-800" />
+                  </div>
+                  <div>
+                    <span className="text-xs sm:text-sm font-bold block leading-tight text-amber-950">วางจากคลิปบอร์ด</span>
+                    <span className="text-[10px] sm:text-[11px] text-amber-700 block mt-0.5">กดวาง หรือ Ctrl + V</span>
                   </div>
                 </button>
               </div>
@@ -785,8 +854,15 @@ export default function ScanPage() {
                   isDragging ? 'border-purple-500 bg-purple-50' : 'border-slate-200 hover:border-purple-300 hover:bg-slate-50/70'
                 }`}
               >
-                <Upload className="w-5 h-5 text-slate-400" />
-                <p className="text-xs font-semibold text-slate-600">หรือลากไฟล์ภาพมาวางที่นี่ (รองรับ JPG, PNG, WEBP ไม่เกิน 20MB)</p>
+                <div className="flex items-center gap-2 text-slate-400">
+                  <Upload className="w-5 h-5" />
+                  <span className="text-slate-300">|</span>
+                  <ClipboardPaste className="w-5 h-5 text-purple-600" />
+                </div>
+                <p className="text-xs font-semibold text-slate-700 text-center">
+                  ลากไฟล์ภาพมาวางที่นี่ หรือกดคีย์ลัด <kbd className="px-1.5 py-0.5 bg-purple-100 border border-purple-200 text-purple-800 rounded font-mono font-bold text-[11px]">Ctrl + V</kbd> เพื่อวางภาพจากคลิปบอร์ดได้ทันที
+                </p>
+                <span className="text-[11px] text-slate-400">รองรับ JPG, PNG, WEBP หรือภาพแคปหน้าจอ (Snipping Tool, PrintScreen)</span>
               </div>
 
               {/* Hidden Inputs */}
@@ -811,6 +887,17 @@ export default function ScanPage() {
                   )}
                 </div>
                 <div className="flex items-center gap-1 shrink-0">
+                  <button
+                    type="button"
+                    onClick={handlePasteFromClipboard}
+                    className="inline-flex items-center gap-1 px-2.5 py-1 bg-white hover:bg-purple-50 text-purple-700 border border-purple-200 rounded-lg text-[11px] font-semibold transition"
+                    title="วางภาพใหม่จากคลิปบอร์ด (หรือกด Ctrl+V)"
+                  >
+                    <ClipboardPaste className="w-3.5 h-3.5" />
+                    <span className="hidden sm:inline">วางภาพใหม่ (Ctrl+V)</span>
+                    <span className="sm:hidden">วาง (Ctrl+V)</span>
+                  </button>
+                  <div className="w-px h-4 bg-slate-200 mx-1 hidden sm:block" />
                   <button onClick={() => setZoom(z => Math.max(50, z - 20))} className="p-1.5 rounded hover:bg-slate-200 text-slate-600"><ZoomOut className="w-3.5 h-3.5" /></button>
                   <span className="text-xs font-mono text-slate-600 w-10 text-center">{zoom}%</span>
                   <button onClick={() => setZoom(z => Math.min(200, z + 20))} className="p-1.5 rounded hover:bg-slate-200 text-slate-600"><ZoomIn className="w-3.5 h-3.5" /></button>
