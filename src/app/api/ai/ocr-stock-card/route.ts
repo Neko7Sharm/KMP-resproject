@@ -77,6 +77,10 @@ async function analyzeImageWithGemini(
   * หากในเอกสารเขียนปี ค.ศ. แบบ 2 หลัก (เช่น 26, 27) ให้แปลงเป็น ค.ศ. 4 หลัก (เช่น 2026, 2027)
 - ช่อง date: ต้องเป็น format "วว/ดด/ปปปป" โดยที่ "ปปปป" ต้องเป็นปี ค.ศ. 4 หลักเท่านั้น (เช่น 07/08/2026) ห้ามเป็น พ.ศ.
 - ช่อง expDate: สกัดวันหมดอายุ EXP จากช่องหมายเหตุหรือช่องระบุวันหมดอายุ ถ้ามี ให้ใส่ใน expDate เป็น format "DD-MM-YYYY" โดยที่ปีต้องเป็น ค.ศ. 4 หลักเท่านั้น (เช่น 19-08-2027) ถ้าไม่มีให้เป็น ""
+- ***สำคัญมากเรื่องยอดคงเหลือ (balanceQty และ totalQty)***:
+  * ในเอกสาร Stock Card (FR 1-6) มักมีช่อง "คงเหลือ" เพียงช่องเดียว
+  * ให้สกัดยอดคงเหลือในช่องคงเหลือของแถวนั้นใส่ใน "balanceQty" และ "totalQty" เสมอ (ห้ามใส่ 0 หากในเอกสารมีตัวเลขยอดคงเหลือเขียนอยู่)
+  * ตัวอย่าง: เมื่อจ่ายออก 20 จากยอดเดิม 293 ในช่องคงเหลือของเอกสารเขียน 273 ให้ใส่ "balanceQty": 273 และ "totalQty": 273 เสมอ ห้ามใส่ 0 เด็ดขาด
 - ตัวเลขทุกค่าให้เป็น number ไม่ใส่ comma
 - ***การสกัดเลขที่ของฟอร์ม (เลขที่ใบการ์ด / Card No.)***:
   * ในเอกสารมักเขียนในรูปแบบ [ลำดับใบ]/[ปี] เช่น "01/26", "006/26" หรือ "01/69"
@@ -451,6 +455,57 @@ function resolveLotNumbers(rows: any[]): any[] {
   });
 }
 
+// ---- Reconcile and calculate lot running balance (แก้ไขปัญหา balanceQty เป็น 0 เมื่อ Stock Card มีช่องคงเหลือช่องเดียว) ----
+function reconcileBalances(rows: any[]): any[] {
+  const lotRunningBal = new Map<string, number>();
+
+  return rows.map((row) => {
+    const lotNum = String(row.lotNumber || '').trim();
+    let inQty = Number(row.inboundQty) || 0;
+    let outQty = Number(row.outboundQty) || 0;
+    let balQty = Number(row.balanceQty) || 0;
+    let totQty = Number(row.totalQty) || 0;
+
+    // 1. ถ้าช่อง balanceQty เป็น 0 แต่ totalQty มีค่า (กรณี AI สกัดเลขช่อง "คงเหลือ" ไปใส่ totalQty)
+    if (balQty === 0 && totQty > 0) {
+      balQty = totQty;
+    }
+    // 2. ถ้าช่อง totalQty เป็น 0 แต่ balanceQty มีค่า
+    if (totQty === 0 && balQty > 0) {
+      totQty = balQty;
+    }
+
+    // 3. ตรวจสอบกับ Running Balance ของล็อต
+    if (lotNum) {
+      const prev = lotRunningBal.get(lotNum);
+      if (inQty > 0) {
+        const next = (prev || 0) + inQty;
+        if (balQty === 0) balQty = next;
+        lotRunningBal.set(lotNum, balQty > 0 ? balQty : next);
+      } else if (outQty > 0) {
+        if (prev !== undefined) {
+          const expected = Math.max(0, prev - outQty);
+          // ถ้ายอด balQty เป็น 0 หรือไม่ได้ระบุ แต่ตามหลักคณิตศาสตร์ยังมีของเหลือ ให้ใช้ expected
+          if (balQty === 0 && expected > 0) {
+            balQty = expected;
+          }
+          lotRunningBal.set(lotNum, balQty);
+        } else if (balQty > 0) {
+          lotRunningBal.set(lotNum, balQty);
+        }
+      } else if (balQty > 0) {
+        lotRunningBal.set(lotNum, balQty);
+      }
+    }
+
+    return {
+      ...row,
+      balanceQty: balQty,
+      totalQty: totQty > 0 ? totQty : balQty,
+    };
+  });
+}
+
 // ---- POST Handler ----
 export async function POST(request: Request) {
   try {
@@ -484,6 +539,7 @@ export async function POST(request: Request) {
         const data = aiResult.data;
         data.rows = resolveLotNumbers(data.rows || []);
         data.rows = normalizeAllDatesToCE(data.rows);
+        data.rows = reconcileBalances(data.rows);
 
         // Extract or enrich formYear and sheetNumber from cardNo (e.g. 01/26 -> sheet 01, year 2026)
         const parsedForm = parseFormNumber(data.cardNo || '');
@@ -567,7 +623,13 @@ export async function POST(request: Request) {
           const lotNum = String(row.lotNumber || 'DEFAULT').trim();
           const inQty  = Number(row.inboundQty)  || 0;
           const outQty = Number(row.outboundQty) || 0;
-          const balQty = Number(row.balanceQty)  || 0;
+          let balQty   = Number(row.balanceQty)  || 0;
+          const totQty = Number(row.totalQty)    || 0;
+
+          // Fallback 1: ถ้า balQty เป็น 0 แต่ totQty มีค่า ให้ใช้ totQty (กรณี Stock Card มีช่องคงเหลือเพียงช่องเดียว)
+          if (balQty === 0 && totQty > 0) {
+            balQty = totQty;
+          }
 
           // Parse date (support Christian AD and Buddhist BE years like 2568, 68)
           let txDate = new Date();
@@ -637,6 +699,11 @@ export async function POST(request: Request) {
             });
           }
 
+          // Fallback 2: ถ้า balQty ยังเป็น 0 ในรายการจ่ายออก แต่ล็อตเดิมมียอดเหลือมากกว่า outQty ให้คำนวณตามจริง ไม่ปัดเป็น 0
+          if (balQty === 0 && targetLot && targetLot.quantityRemaining > outQty && outQty > 0) {
+            balQty = targetLot.quantityRemaining - outQty;
+          }
+
           if (!targetLot && (inQty > 0 || balQty > 0)) {
             const mfgDate = formYear ? new Date(formYear, 0, 1) : null;
             targetLot = await tx.materialLot.create({
@@ -654,7 +721,10 @@ export async function POST(request: Request) {
             createdLots++;
           } else if (targetLot) {
             // Update remaining quantity and status based on this transaction row
-            const newBal = balQty;
+            let newBal = balQty;
+            if (newBal === 0 && targetLot.quantityRemaining > outQty && outQty > 0) {
+              newBal = targetLot.quantityRemaining - outQty;
+            }
             const newStatus = newBal <= 0 ? 'EXHAUSTED' : 'ACTIVE';
             targetLot = await tx.materialLot.update({
               where: { id: targetLot.id },
@@ -671,6 +741,8 @@ export async function POST(request: Request) {
             lotMap.set(lotNum, targetLot.id);
           }
 
+          const finalLotBal = balQty > 0 ? balQty : (targetLot ? targetLot.quantityRemaining : 0);
+
           // Write transaction record
           if (inQty > 0) {
             await tx.stockTransaction.create({
@@ -679,8 +751,8 @@ export async function POST(request: Request) {
                 lotId: lotId || null,
                 type: 'INBOUND',
                 quantity: inQty,
-                lotBalanceAfter: balQty,
-                totalStockAfter: Number(row.totalQty) || null,
+                lotBalanceAfter: finalLotBal,
+                totalStockAfter: totQty > 0 ? totQty : finalLotBal,
                 transactionDate: txDate,
                 documentRef: documentRef || 'STOCK-CARD-IMPORT',
                 remarks: row.remarks || `รับเข้าล็อต ${lotNum}`,
@@ -695,8 +767,8 @@ export async function POST(request: Request) {
                 lotId: lotId || null,
                 type: 'OUTBOUND',
                 quantity: outQty,
-                lotBalanceAfter: balQty,
-                totalStockAfter: Number(row.totalQty) || null,
+                lotBalanceAfter: finalLotBal,
+                totalStockAfter: totQty > 0 ? totQty : finalLotBal,
                 transactionDate: txDate,
                 documentRef: documentRef || 'STOCK-CARD-IMPORT',
                 remarks: row.remarks || `จ่ายออกล็อต ${lotNum}`,
