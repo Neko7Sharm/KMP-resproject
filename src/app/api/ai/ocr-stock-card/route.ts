@@ -5,9 +5,29 @@ import { getAllKeys, GeminiKeyEntry } from '@/lib/geminiKeys';
 import { recordAuditLog } from '@/lib/auditLog';
 import { getCurrentUser } from '@/lib/auth';
 
-// วิเคราะห์ภาพใช้เวลานาน — กัน Vercel ตัดตอนกลางคัน
-export const maxDuration = 60;
+// วิเคราะห์ภาพใช้เวลานาน — กัน Vercel ตัดตอนกลางคัน (ให้เวลารวมสูงสุด 120 วินาที)
+export const maxDuration = 120;
 export const dynamic = 'force-dynamic';
+
+// Helper: ทำความสะอาดและแปลง JSON ให้ทนทานต่อ Markdown Fences หรือ Trailing Commas
+function cleanAndParseJSON(text: string): any {
+  let clean = text.trim();
+  clean = clean.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '').trim();
+
+  const firstBrace = clean.indexOf('{');
+  const lastBrace = clean.lastIndexOf('}');
+  if (firstBrace !== -1 && lastBrace !== -1 && lastBrace > firstBrace) {
+    clean = clean.slice(firstBrace, lastBrace + 1);
+  }
+
+  try {
+    return JSON.parse(clean);
+  } catch {
+    // แก้ไขกรณีมี trailing comma เช่น {"a": 1,} หรือ [1, 2,]
+    const fixed = clean.replace(/,\s*([\]}])/g, '$1');
+    return JSON.parse(fixed);
+  }
+}
 
 // Error แบบมีชนิด เพื่อให้หน้าเว็บรู้ว่าต้องขอ API Key หรือไม่
 class AIError extends Error {
@@ -32,18 +52,16 @@ async function analyzeImageWithGemini(
     throw new AIError('NO_KEY', 'ยังไม่มี Gemini API Key ในระบบ', true);
   }
 
-  // จัดเรียงโมเดลตามความเร็วสูงสุดเพื่อให้อยู่ในกรอบเวลา Serverless Function (< 10s)
-  // จากผลทดสอบจริง (Benchmark):
-  // 1. gemini-3.5-flash-lite: ~1.5 วินาที (เร็วที่สุด เสถียรสูง แม่นยำ)
-  // 2. gemini-flash-lite-latest: ~1.9 วินาที (ตัวสำรองความเร็วสูง)
-  // 3. gemini-3.6-flash: ~2.0 - 4.5 วินาที
-  // 4. gemini-3.7-flash: ตัวสำรองความสามารถสูง (แต่ใช้เวลา ~7-14s)
+  // จัดเรียงโมเดลที่เสถียรที่สุดและโควตาสูงสุดก่อน:
+  // 1. gemini-3.5-flash-lite: ความเร็วสูงมาก (~1.5s), โควตาสูงสุด (15 RPM / 500 RPD)
+  // 2. gemini-flash-lite-latest: ตัวสำรอง Lite ความเร็วสูง
+  // 3. gemini-3.8-flash: โมเดลรุ่นใหม่ อ่านลายมือและตารางละเอียดสูง
+  // 4. gemini-3.7-flash: โมเดลสำรองความสามารถสูง
   const candidateModels = [
     'gemini-3.5-flash-lite',
     'gemini-flash-lite-latest',
     'gemini-3.8-flash',
     'gemini-3.7-flash',
-    'gemini-3.6-flash',
   ];
 
   const prompt = `คุณเป็นผู้เชี่ยวชาญอ่านเอกสารใบสต็อกการ์ดคลังสินค้า (Stock Card / FR 1-6) ลายมือภาษาไทยและตัวเลข
@@ -104,8 +122,9 @@ async function analyzeImageWithGemini(
   let sawTimeout = false;
 
   const startTime = Date.now();
-  const MAX_TOTAL_BUDGET_MS = 50000; // เพดานเวลารวม 50 วินาที (ให้อ่านเอกสารจนเสร็จสมบูรณ์ และมีเวลาสลับคีย์สำรอง)
-  const PER_MODEL_TIMEOUT_MS = 25000; // ให้เวลาแต่ละโมเดลสูงสุด 25 วินาที เพื่อให้อ่านลายมือและตารางยาวได้จนครบถ้วน
+  // ขยายเพดานเวลารวมและต่อโมเดล เพื่อให้ AI มีเวลาแกะลายมือและตารางยาวจนเสร็จสมบูรณ์โดยไม่ถูกตัดตอน
+  const MAX_TOTAL_BUDGET_MS = 90000; // เพดานเวลารวม 90 วินาที
+  const PER_MODEL_TIMEOUT_MS = 45000; // ให้เวลาแต่ละโมเดลสูงสุด 45 วินาที
 
   // Outer loop: คีย์สำรองใน DB (คีย์ล่าสุดก่อน) แล้วตามด้วยคีย์ระบบ (env)
   for (const entry of apiKeys) {
@@ -125,7 +144,7 @@ async function analyzeImageWithGemini(
         break;
       }
 
-      const remainingBudget = Math.max(5000, MAX_TOTAL_BUDGET_MS - elapsed);
+      const remainingBudget = Math.max(10000, MAX_TOTAL_BUDGET_MS - elapsed);
       const callTimeoutMs = Math.min(PER_MODEL_TIMEOUT_MS, remainingBudget);
 
       try {
@@ -134,7 +153,7 @@ async function analyzeImageWithGemini(
           generationConfig: {
             temperature: 0.1,
             responseMimeType: 'application/json',
-            maxOutputTokens: 2048,
+            maxOutputTokens: 8192, // เพิ่มเป็น 8192 เพื่อไม่ให้ JSON โดนตัดตอนกลางคันเมื่อตารางยาว
           },
           safetySettings: [
             { category: HarmCategory.HARM_CATEGORY_HARASSMENT, threshold: HarmBlockThreshold.BLOCK_NONE },
@@ -156,16 +175,12 @@ async function analyzeImageWithGemini(
             timeoutPromise,
           ]);
 
-          const text = result.response.text().trim();
-          const jsonStr = text
-            .replace(/^```json\s*/i, '')
-            .replace(/^```\s*/i, '')
-            .replace(/\s*```$/i, '')
-            .trim();
+          const text = result.response.text();
+          const parsedData = cleanAndParseJSON(text);
 
           return {
             success: true,
-            data: JSON.parse(jsonStr),
+            data: parsedData,
             usedModel: modelName,
             usedKeySource: entry.source,
           };
@@ -216,7 +231,7 @@ async function analyzeImageWithGemini(
 
   // ถ้าเจอปัญหา Rate Limit (429) บนคีย์ทั้งหมด และยังมีเวลาเหลือ ให้รอสั้นๆ 2.5 วินาทีแล้วลองคีย์แรกอีก 1 ครั้ง (ช่วยเคลียร์หน้าต่าง 15 RPM)
   const remainingAfterLoop = MAX_TOTAL_BUDGET_MS - (Date.now() - startTime);
-  if (sawRateLimit && !sawTimeout && remainingAfterLoop > 8000 && apiKeys.length > 0) {
+  if (sawRateLimit && !sawTimeout && remainingAfterLoop > 15000 && apiKeys.length > 0) {
     const retryEntry = apiKeys[0];
     const genAI = new GoogleGenerativeAI(retryEntry.key);
     console.warn('Gemini 429 rate limit detected across keys. Waiting 2.5s for backoff retry...');
@@ -229,20 +244,16 @@ async function analyzeImageWithGemini(
           generationConfig: {
             temperature: 0.1,
             responseMimeType: 'application/json',
-            maxOutputTokens: 2048,
+            maxOutputTokens: 8192,
           },
         });
         const result = await model.generateContent([prompt, imagePart]);
-        const text = result.response.text().trim();
-        const jsonStr = text
-          .replace(/^```json\s*/i, '')
-          .replace(/^```\s*/i, '')
-          .replace(/\s*```$/i, '')
-          .trim();
+        const text = result.response.text();
+        const parsedData = cleanAndParseJSON(text);
 
         return {
           success: true,
-          data: JSON.parse(jsonStr),
+          data: parsedData,
           usedModel: modelName,
           usedKeySource: retryEntry.source,
         };

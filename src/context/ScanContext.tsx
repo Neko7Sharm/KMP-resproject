@@ -128,24 +128,32 @@ export function ScanProvider({ children }: { children: React.ReactNode }) {
 
       if (progressIntervalRef.current) clearInterval(progressIntervalRef.current);
 
-      let elapsedCount = 0;
-      let currentPct = 10;
+      let elapsedSeconds = 0;
+      let currentPct = 12;
       progressIntervalRef.current = setInterval(() => {
-        elapsedCount++;
-        currentPct += Math.floor(Math.random() * 5) + 2;
-        if (currentPct > 94) currentPct = 94;
-        setAnalyzeProgress(currentPct);
+        elapsedSeconds += 0.5;
 
-        if (elapsedCount > 20) {
+        // ค่อยๆ ไต่ระดับเปอร์เซ็นต์อย่างนุ่มนวล ไม่กระชากไปตันที่ 94% เร็วเกินไป
+        if (currentPct < 45) {
+          currentPct += Math.random() * 2.5 + 1.5;
+        } else if (currentPct < 75) {
+          currentPct += Math.random() * 1.5 + 0.8;
+        } else if (currentPct < 92) {
+          currentPct += 0.4;
+        }
+        if (currentPct > 94) currentPct = 94;
+        setAnalyzeProgress(Math.round(currentPct));
+
+        if (elapsedSeconds > 35) {
+          setAnalyzeStepText('กำลังประมวลผลขั้นตอนสุดท้ายเพื่อความแม่นยำสูงสุด...');
+        } else if (elapsedSeconds > 20) {
+          setAnalyzeStepText('กำลังตรวจสอบยอดรับ-จ่าย วันหมดอายุ และจัดรูปแบบข้อมูล...');
+        } else if (elapsedSeconds > 10) {
           setAnalyzeStepText('กำลังวิเคราะห์ตารางและสกัดลายมือภาษาไทยอย่างละเอียด...');
-        } else if (currentPct < 30) {
-          setAnalyzeStepText('กำลังประมวลผลรูปภาพ...');
-        } else if (currentPct < 60) {
+        } else if (elapsedSeconds > 4) {
           setAnalyzeStepText('Gemini AI กำลังตรวจจับตารางและลายมือภาษาไทย...');
-        } else if (currentPct < 85) {
-          setAnalyzeStepText('กำลังสกัดเลขล็อต ยอดรับ-จ่าย และวันหมดอายุ...');
         } else {
-          setAnalyzeStepText('กำลังจัดรูปแบบ JSON และตรวจสอบปี ค.ศ....');
+          setAnalyzeStepText('กำลังส่งภาพและเชื่อมต่อระบบ AI...');
         }
       }, 500);
 
