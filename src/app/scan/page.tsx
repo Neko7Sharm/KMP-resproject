@@ -608,15 +608,16 @@ export default function ScanPage() {
         </div>
       )}
       {hasApiKey === true && (
-        <div className="p-3 bg-emerald-50 border border-emerald-200 rounded-xl flex items-center gap-2 text-xs text-emerald-800">
-          <CheckCircle2 className="w-4 h-4 text-emerald-500 shrink-0" />
-          <strong>Gemini AI พร้อมใช้งาน</strong>
-          <span className="flex-1">— {sharedKeyAvailable && !systemKeyAvailable ? 'ใช้ API Key กลางที่ตั้งไว้ในระบบ' : 'ใช้ API ของระบบ'}</span>
+        <div className="p-3 bg-emerald-50 border border-emerald-200 rounded-xl flex items-center justify-between text-xs text-emerald-800">
+          <div className="flex items-center gap-2">
+            <CheckCircle2 className="w-4 h-4 text-emerald-500 shrink-0" />
+            <strong className="font-semibold text-emerald-800">AI พร้อมใช้งาน</strong>
+          </div>
           <button
-            onClick={() => openKeyModal('เปลี่ยน API Key กลางที่ใช้ร่วมกันทุกคน')}
-            className="shrink-0 underline text-emerald-700 hover:text-emerald-900"
+            onClick={() => openKeyModal('เปลี่ยนหรือเพิ่ม API Key')}
+            className="shrink-0 underline text-emerald-700 hover:text-emerald-900 font-medium"
           >
-            เปลี่ยน key
+            เปลี่ยนหรือเพิ่ม API
           </button>
         </div>
       )}
