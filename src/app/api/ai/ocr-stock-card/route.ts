@@ -41,8 +41,9 @@ async function analyzeImageWithGemini(
   const candidateModels = [
     'gemini-3.5-flash-lite',
     'gemini-flash-lite-latest',
-    'gemini-3.6-flash',
+    'gemini-3.8-flash',
     'gemini-3.7-flash',
+    'gemini-3.6-flash',
   ];
 
   const prompt = `คุณเป็นผู้เชี่ยวชาญอ่านเอกสารใบสต็อกการ์ดคลังสินค้า (Stock Card / FR 1-6) ลายมือภาษาไทยและตัวเลข
@@ -96,7 +97,8 @@ async function analyzeImageWithGemini(
   const imagePart = { inlineData: { data: cleanBase64, mimeType: mimeType || 'image/jpeg' } };
 
   let lastError: any = null;
-  const failures: { source: 'system' | 'shared'; kind: 'quota' | 'invalid' }[] = [];
+  const invalidKeyFailures: { source: 'system' | 'shared' }[] = [];
+  let sawRateLimit = false;
   let sawOverload = false;
   let sawBadOutput = false;
   let sawTimeout = false;
@@ -186,13 +188,13 @@ async function analyzeImageWithGemini(
           continue;
         }
         if (isInvalidKey) {
-          failures.push({ source: entry.source, kind: 'invalid' });
+          invalidKeyFailures.push({ source: entry.source });
           keyFailed = true;
           break;
         }
         if (isQuota) {
-          console.warn(`Gemini key (${entry.source}) quota/rate limited, switching to next key...`);
-          failures.push({ source: entry.source, kind: 'quota' });
+          sawRateLimit = true;
+          console.warn(`Gemini key (${entry.source}) hit rate limit (429), switching to next key...`);
           keyFailed = true;
           break;
         }
@@ -212,23 +214,78 @@ async function analyzeImageWithGemini(
     if (keyFailed) continue;
   }
 
-  // ทุก key/โมเดลล้มเหลว → ส่ง error แบบมีชนิด ให้หน้าเว็บตัดสินใจ
-  const last = failures[failures.length - 1];
-  if (last) {
+  // ถ้าเจอปัญหา Rate Limit (429) บนคีย์ทั้งหมด และยังมีเวลาเหลือ ให้รอสั้นๆ 2.5 วินาทีแล้วลองคีย์แรกอีก 1 ครั้ง (ช่วยเคลียร์หน้าต่าง 15 RPM)
+  const remainingAfterLoop = MAX_TOTAL_BUDGET_MS - (Date.now() - startTime);
+  if (sawRateLimit && !sawTimeout && remainingAfterLoop > 8000 && apiKeys.length > 0) {
+    const retryEntry = apiKeys[0];
+    const genAI = new GoogleGenerativeAI(retryEntry.key);
+    console.warn('Gemini 429 rate limit detected across keys. Waiting 2.5s for backoff retry...');
+    await new Promise((resolve) => setTimeout(resolve, 2500));
+
+    for (const modelName of ['gemini-3.5-flash-lite', 'gemini-flash-lite-latest']) {
+      try {
+        const model = genAI.getGenerativeModel({
+          model: modelName,
+          generationConfig: {
+            temperature: 0.1,
+            responseMimeType: 'application/json',
+            maxOutputTokens: 2048,
+          },
+        });
+        const result = await model.generateContent([prompt, imagePart]);
+        const text = result.response.text().trim();
+        const jsonStr = text
+          .replace(/^```json\s*/i, '')
+          .replace(/^```\s*/i, '')
+          .replace(/\s*```$/i, '')
+          .trim();
+
+        return {
+          success: true,
+          data: JSON.parse(jsonStr),
+          usedModel: modelName,
+          usedKeySource: retryEntry.source,
+        };
+      } catch (retryErr: any) {
+        lastError = retryErr;
+        const retryMsg = String(retryErr?.message || '');
+        if (/\[429|429 |quota|RESOURCE_EXHAUSTED|rate limit/i.test(retryMsg)) {
+          sawRateLimit = true;
+        }
+      }
+    }
+  }
+
+  // ลำดับการรายงาน Error อย่างแม่นยำ:
+  // 1. ถ้าทุก key ในระบบล้วนเป็น key ปลอม/หมดอายุจริง (400, 401, 403) เท่านั้นที่เปิด modal ขอ key (needsKey = true)
+  if (invalidKeyFailures.length > 0 && invalidKeyFailures.length >= apiKeys.length) {
     throw new AIError(
-      last.kind === 'quota' ? 'KEY_QUOTA' : 'KEY_INVALID',
-      last.kind === 'quota' ? 'API Key หมดโควตาหรือถูกจำกัดการใช้งาน' : 'API Key ไม่ถูกต้องหรือหมดอายุ',
+      'KEY_INVALID',
+      'API Key ทั้งหมดในระบบไม่ถูกต้องหรือหมดอายุ กรุณาตรวจสอบหรือเพิ่ม API Key ใหม่',
       true,
-      last.source
+      invalidKeyFailures[0].source
     );
   }
+
+  // 2. ถ้าเวลาหมด
   if (sawTimeout) {
     throw new AIError(
       'AI_TIMEOUT',
-      'AI ประมวลผลนานเกินกำหนดชั่วคราว กรุณากด "ลองสแกนอีกครั้ง" หรือใส่ Gemini API Key ส่วนตัว',
+      'AI ประมวลผลนานเกินกำหนดชั่วคราว กรุณากด "ลองสแกนอีกครั้ง" หรือใส่ Gemini API Key สำรอง',
       false
     );
   }
+
+  // 3. ถ้าเจอ Rate Limit (429: 15 ครั้ง/นาที ของ Google Free Tier) ไม่ต้องบังคับเปิด modal เปลี่ยน key
+  if (sawRateLimit) {
+    throw new AIError(
+      'RATE_LIMIT',
+      'อัตราการเรียกใช้งานของ Google AI เต็มชั่วคราว (Rate Limit: 15 ครั้ง/นาที) กรุณารอสักครู่ (10-20 วินาที) แล้วกด "ลองสแกนอีกครั้ง" หรือเพิ่ม API Key สำรอง',
+      false
+    );
+  }
+
+  // 4. ถ้าเซิร์ฟเวอร์ Google มีผู้ใช้หนาแน่น (503)
   if (sawOverload) {
     throw new AIError(
       'AI_BUSY',
@@ -236,10 +293,13 @@ async function analyzeImageWithGemini(
       false
     );
   }
+
+  // 5. ถ้าอ่านภาพไม่ได้
   if (sawBadOutput) {
     throw new AIError('BAD_IMAGE', 'AI อ่านข้อมูลจากภาพไม่ได้ กรุณาถ่ายภาพใหม่ให้ชัดเจนขึ้น', false);
   }
-  throw new AIError('AI_ERROR', lastError?.message || 'AI วิเคราะห์ไม่สำเร็จ', false);
+
+  throw new AIError('AI_ERROR', lastError?.message || 'AI วิเคราะห์ไม่สำเร็จ กรุณากดลองใหม่อีกครั้ง', false);
 }
 
 // ---- Helper: Convert any year (พ.ศ. or 2-digit) to 4-digit CE (ค.ศ.) ----

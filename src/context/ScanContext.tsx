@@ -181,7 +181,7 @@ export function ScanProvider({ children }: { children: React.ReactNode }) {
           if (data.needsKey) {
             openKeyModal(
               data.keySource === 'shared'
-                ? `${data.error} — กรุณาใส่ key ใหม่เพื่อใช้แทน key กลางเดิม`
+                ? `${data.error} — กรุณาตรวจสอบหรือเพิ่ม API Key สำรองในระบบ`
                 : data.code === 'NO_KEY'
                   ? 'ยังไม่มี API Key ในระบบ กรุณาใส่ key เพื่อเปิดใช้งานระบบสแกน'
                   : `${data.error} — กรุณาใส่ key ของคุณเพื่อสแกนต่อ`
