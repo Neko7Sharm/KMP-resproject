@@ -531,7 +531,6 @@ export default function ScanPage() {
           return {
             ...r,
             balanceQty: val,
-            totalQty: val,
           };
         }
         return r;
@@ -549,7 +548,6 @@ export default function ScanPage() {
           return {
             ...r,
             balanceQty: expectedVal,
-            totalQty: expectedVal,
           };
         }
         return r;
@@ -1678,13 +1676,14 @@ export default function ScanPage() {
                           />
                         </div>
                         <div>
-                          <span className="text-[10px] font-bold text-purple-800 block mb-0.5">คงเหลือ/Lot</span>
+                          <span className="text-[10px] font-bold text-purple-800 block mb-0.5" title="ยอดคงเหลือของล็อตนี้โดยเฉพาะ">คงเหลือ (Lot นี้)</span>
                           <input
                             type="number"
                             value={row.balanceQty === 0 ? '' : row.balanceQty}
                             placeholder="0"
                             onChange={e => updateRow(row.id, 'balanceQty', parseFloat(e.target.value) || 0)}
                             className="w-full px-2 py-1 bg-white border border-purple-200 text-slate-800 font-bold text-xs text-right rounded-lg focus:ring-1 focus:ring-purple-500 outline-none"
+                            title="ยอดคงเหลือเฉพาะล็อตนี้"
                           />
                         </div>
                       </div>
@@ -1692,13 +1691,14 @@ export default function ScanPage() {
                       {/* Total & Remarks */}
                       <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs">
                         <div className="flex items-center gap-1.5">
-                          <span className="text-[10px] text-slate-400 shrink-0">รวมสะสม:</span>
+                          <span className="text-[10px] text-slate-500 font-semibold shrink-0" title="ยอดคงเหลือรวมทั้งหมดของทุก Lot ในวัตถุดิบนี้">ยอดรวมทุก Lot:</span>
                           <input
                             type="number"
                             value={row.totalQty === 0 ? '' : row.totalQty}
                             placeholder="0"
                             onChange={e => updateRow(row.id, 'totalQty', parseFloat(e.target.value) || 0)}
                             className="w-full px-2 py-1 bg-slate-50 border border-slate-200 text-slate-600 text-xs text-right rounded-lg outline-none"
+                            title="ยอดคงเหลือรวมทั้งหมดของทุก Lot ในวัตถุดิบนี้"
                           />
                         </div>
                         <div className="flex items-center gap-1.5">
@@ -1721,7 +1721,7 @@ export default function ScanPage() {
                   <table className="w-full text-xs">
                     <thead className="bg-slate-50 border-b border-slate-100 sticky top-0">
                       <tr>
-                        {['#', 'วันที่', 'Lot No.', 'รับเข้า', 'จ่ายออก', 'คงเหลือ/Lot', 'รวมทั้งหมด', 'EXP Date', 'หมายเหตุ', ''].map(h => (
+                        {['#', 'วันที่', 'Lot No.', 'รับเข้า', 'จ่ายออก', 'คงเหลือ (Lot นี้)', 'ยอดรวม (ทุก Lot)', 'EXP Date', 'หมายเหตุ', ''].map(h => (
                           <th key={h} className="px-2 py-2 text-left font-semibold text-slate-600 whitespace-nowrap">{h}</th>
                         ))}
                       </tr>
@@ -1802,6 +1802,7 @@ export default function ScanPage() {
                               placeholder="0"
                               onChange={e => updateRow(row.id, 'balanceQty', parseFloat(e.target.value) || 0)}
                               className="w-20 px-2 py-1 bg-slate-50 hover:bg-white focus:bg-white border border-transparent hover:border-slate-200 focus:border-purple-500 rounded text-xs text-slate-800 text-right outline-none transition"
+                              title="ยอดคงเหลือของล็อตนี้โดยเฉพาะ (Lot Balance)"
                             />
                           </td>
                           {/* Total */}
@@ -1812,6 +1813,7 @@ export default function ScanPage() {
                               placeholder="0"
                               onChange={e => updateRow(row.id, 'totalQty', parseFloat(e.target.value) || 0)}
                               className="w-20 px-2 py-1 bg-slate-50 hover:bg-white focus:bg-white border border-transparent hover:border-slate-200 focus:border-purple-500 rounded text-xs text-slate-500 text-right outline-none transition"
+                              title="ยอดรวมคงเหลือทั้งหมดของทุก Lot ในวัตถุดิบนี้ (Total Material Stock)"
                             />
                           </td>
                           {/* EXP Date */}

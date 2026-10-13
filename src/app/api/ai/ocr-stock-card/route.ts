@@ -77,10 +77,17 @@ async function analyzeImageWithGemini(
   * หากในเอกสารเขียนปี ค.ศ. แบบ 2 หลัก (เช่น 26, 27) ให้แปลงเป็น ค.ศ. 4 หลัก (เช่น 2026, 2027)
 - ช่อง date: ต้องเป็น format "วว/ดด/ปปปป" โดยที่ "ปปปป" ต้องเป็นปี ค.ศ. 4 หลักเท่านั้น (เช่น 07/08/2026) ห้ามเป็น พ.ศ.
 - ช่อง expDate: สกัดวันหมดอายุ EXP จากช่องหมายเหตุหรือช่องระบุวันหมดอายุ ถ้ามี ให้ใส่ใน expDate เป็น format "DD-MM-YYYY" โดยที่ปีต้องเป็น ค.ศ. 4 หลักเท่านั้น (เช่น 19-08-2027) ถ้าไม่มีให้เป็น ""
-- ***สำคัญมากเรื่องยอดคงเหลือ (balanceQty และ totalQty)***:
-  * ในเอกสาร Stock Card (FR 1-6) มักมีช่อง "คงเหลือ" เพียงช่องเดียว
-  * ให้สกัดยอดคงเหลือในช่องคงเหลือของแถวนั้นใส่ใน "balanceQty" และ "totalQty" เสมอ (ห้ามใส่ 0 หากในเอกสารมีตัวเลขยอดคงเหลือเขียนอยู่)
-  * ตัวอย่าง: เมื่อจ่ายออก 20 จากยอดเดิม 293 ในช่องคงเหลือของเอกสารเขียน 273 ให้ใส่ "balanceQty": 273 และ "totalQty": 273 เสมอ ห้ามใส่ 0 เด็ดขาด
+- ***สำคัญมากเรื่องยอดคงเหลือ (balanceQty และ totalQty) ในเอกสาร Stock Card (FR 1-6)***:
+  * ในเอกสารมี 2 คอลัมน์ที่ต้องแยกจากกันอย่างชัดเจน:
+    1) คอลัมน์ "คงเหลือ" (balanceQty) = ยอดคงเหลือของ Lot นั้นโดยเฉพาะ
+       - เมื่อรับเข้า ยอดคงเหลือของ lot นั้นจะเพิ่มขึ้นตามจำนวนรับ
+       - เมื่อจ่ายออก ยอดคงเหลือของ lot นั้นจะลดลง (เช่น lot เดิม 293 จ่ายออก 20 -> คงเหลือใน lot คือ 273)
+       - เมื่อจ่าย lot นั้นจนหมด ช่องคงเหลือจะเขียนเลข 0 (ให้สกัด balanceQty: 0)
+    2) คอลัมน์ "ยอดรวม" (totalQty) = ยอดรวมทั้งหมดของทุก Lot ในวัตถุดิบนั้นในคลัง
+       - คือยอดคงเหลือสะสมของวัตถุดิบทั้งหมดรวมทุกล็อต ณ ขณะนั้น (Total Material Stock across all lots)
+       - ยอดนี้เกิดจาก ยอดรวมแถวก่อนหน้า + รับเข้า - จ่ายออก
+       - เช่น แม้ว่า lot นั้นจะจ่ายจนคงเหลือ 0 แต่ในคลังยังมี lot อื่นอยู่ ช่อง "ยอดรวม" ก็จะแสดงยอดคงเหลือรวมทุกล็อตที่เหลืออยู่ในคลัง
+  * ให้สกัดตัวเลขจากช่อง "คงเหลือ" ใส่ใน balanceQty และตัวเลขจากช่อง "ยอดรวม" ใส่ใน totalQty แยกกันตามจริง ห้ามสลับกันเด็ดขาด
 - ตัวเลขทุกค่าให้เป็น number ไม่ใส่ comma
 - ***การสกัดเลขที่ของฟอร์ม (เลขที่ใบการ์ด / Card No.)***:
   * ในเอกสารมักเขียนในรูปแบบ [ลำดับใบ]/[ปี] เช่น "01/26", "006/26" หรือ "01/69"
@@ -455,7 +462,7 @@ function resolveLotNumbers(rows: any[]): any[] {
   });
 }
 
-// ---- Reconcile and calculate lot running balance (แก้ไขปัญหา balanceQty เป็น 0 เมื่อ Stock Card มีช่องคงเหลือช่องเดียว) ----
+// ---- Reconcile and calculate lot running balance ----
 function reconcileBalances(rows: any[]): any[] {
   const lotRunningBal = new Map<string, number>();
 
@@ -466,16 +473,7 @@ function reconcileBalances(rows: any[]): any[] {
     let balQty = Number(row.balanceQty) || 0;
     let totQty = Number(row.totalQty) || 0;
 
-    // 1. ถ้าช่อง balanceQty เป็น 0 แต่ totalQty มีค่า (กรณี AI สกัดเลขช่อง "คงเหลือ" ไปใส่ totalQty)
-    if (balQty === 0 && totQty > 0) {
-      balQty = totQty;
-    }
-    // 2. ถ้าช่อง totalQty เป็น 0 แต่ balanceQty มีค่า
-    if (totQty === 0 && balQty > 0) {
-      totQty = balQty;
-    }
-
-    // 3. ตรวจสอบกับ Running Balance ของล็อต
+    // ตรวจสอบกับ Running Balance ของล็อตนั้นโดยเฉพาะ (balanceQty)
     if (lotNum) {
       const prev = lotRunningBal.get(lotNum);
       if (inQty > 0) {
@@ -485,8 +483,8 @@ function reconcileBalances(rows: any[]): any[] {
       } else if (outQty > 0) {
         if (prev !== undefined) {
           const expected = Math.max(0, prev - outQty);
-          // ถ้ายอด balQty เป็น 0 หรือไม่ได้ระบุ แต่ตามหลักคณิตศาสตร์ยังมีของเหลือ ให้ใช้ expected
-          if (balQty === 0 && expected > 0) {
+          // ถ้าไม่ได้ระบุ balQty มา (empty) แต่ตามการคำนวณยังมีเหลือ ให้ใช้ expected
+          if (balQty === 0 && expected > 0 && String(row.balanceQty ?? '').trim() === '') {
             balQty = expected;
           }
           lotRunningBal.set(lotNum, balQty);
@@ -501,7 +499,7 @@ function reconcileBalances(rows: any[]): any[] {
     return {
       ...row,
       balanceQty: balQty,
-      totalQty: totQty > 0 ? totQty : balQty,
+      totalQty: totQty,
     };
   });
 }
@@ -759,8 +757,9 @@ export async function POST(request: Request) {
           let balQty   = Number(row.balanceQty)  || 0;
           const totQty = Number(row.totalQty)    || 0;
 
-          // Fallback 1: ถ้า balQty เป็น 0 แต่ totQty มีค่า ให้ใช้ totQty (กรณี Stock Card มีช่องคงเหลือเพียงช่องเดียว)
-          if (balQty === 0 && totQty > 0) {
+          // Fallback: ใช้ totQty แทน balQty ได้เฉพาะแถวรับเข้า (inQty > 0) ที่ไม่ได้ระบุ balQty มาเท่านั้น
+          // (เพราะ totQty คือยอดรวมของทุก lot ในวัตถุดิบนั้น ไม่ใช่ยอดของ lot นี้)
+          if (balQty === 0 && totQty > 0 && inQty > 0 && outQty === 0) {
             balQty = totQty;
           }
 
