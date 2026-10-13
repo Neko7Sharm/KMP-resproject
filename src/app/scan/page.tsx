@@ -625,7 +625,29 @@ export default function ScanPage() {
       {errorMsg && (
         <div className="p-4 bg-rose-50 border border-rose-200 rounded-xl flex items-start gap-3">
           <AlertCircle className="w-5 h-5 text-rose-500 shrink-0 mt-0.5" />
-          <div className="text-sm text-rose-800 flex-1">{errorMsg}</div>
+          <div className="text-sm text-rose-800 flex-1 space-y-2">
+            <div>{errorMsg}</div>
+            <div className="flex items-center gap-2 flex-wrap pt-1">
+              {imageBase64 && (
+                <button
+                  type="button"
+                  onClick={() => startScan()}
+                  disabled={isAnalyzing}
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-rose-600 hover:bg-rose-700 disabled:opacity-60 text-white rounded-lg text-xs font-bold transition shadow-xs"
+                >
+                  <RefreshCw className="w-3.5 h-3.5" />
+                  <span>ลองสแกนอีกครั้ง</span>
+                </button>
+              )}
+              <button
+                type="button"
+                onClick={() => openKeyModal('ใส่ API Key สำรองของตนเองเพื่อเลี่ยงปัญหาคิวหนาแน่น')}
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-white border border-rose-300 hover:bg-rose-100 text-rose-800 rounded-lg text-xs font-semibold transition"
+              >
+                <span>🔑 เปลี่ยน/ใส่ API Key สำรอง</span>
+              </button>
+            </div>
+          </div>
           <button onClick={() => setErrorMsg(null)} className="text-rose-400 hover:text-rose-600">
             <X className="w-4 h-4" />
           </button>

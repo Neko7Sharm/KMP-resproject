@@ -34,9 +34,10 @@ async function analyzeImageWithGemini(
 
   // โมเดล vision ที่เร็วที่สุดและแม่นยำสูง (จัดเรียงตัวที่เร็วที่สุดไว้หน้าสุดเพื่อหลีกเลี่ยง Gateway Timeout)
   const candidateModels = [
-    'gemini-3.5-flash',       // เร็วที่สุด (~2.5-3.5 วินาที)
-    'gemini-3.5-flash-lite',  // เร็วพิเศษและกินโควตาน้อย (~3.5 วินาที)
-    'gemini-flash-latest',    // ตัวสำรอง
+    'gemini-3.7-flash',         // เร็วที่สุด (~2.2 วินาที, คลัสเตอร์ใหม่ล่าสุด)
+    'gemini-3.5-flash',         // เสถียรสูง (~3.5 วินาที)
+    'gemini-3.5-flash-lite',    // ประหยัดโควตา (~3.5-10 วินาที)
+    'gemini-flash-lite-latest', // ตัวสำรอง
   ];
 
   const prompt = `คุณเป็นผู้เชี่ยวชาญอ่านเอกสารใบสต็อกการ์ดคลังสินค้า (Stock Card / FR 1-6) ลายมือภาษาไทยและตัวเลข
@@ -94,76 +95,90 @@ async function analyzeImageWithGemini(
   let sawOverload = false;
   let sawBadOutput = false;
 
-  // Outer loop: key ระบบก่อน แล้วค่อย key กลางใน DB
-  for (const entry of apiKeys) {
-    const genAI = new GoogleGenerativeAI(entry.key);
-    let keyFailed = false;
+  const MAX_RETRIES = 2; // ลองซ้ำอัตโนมัติหากติด 503 Overload ชั่วขณะ
+  let attempt = 0;
 
-    // Inner loop: ลองทีละโมเดลด้วย key นี้ (ลองโมเดลละ 1 รอบ ถ้าผิดพลาดข้ามไปโมเดลถัดไปทันที เพื่อไม่ให้เซิร์ฟเวอร์ติด Timeout)
-    for (const modelName of candidateModels) {
-      try {
-        const model = genAI.getGenerativeModel({
-          model: modelName,
-          generationConfig: {
-            temperature: 0.1,
-            responseMimeType: 'application/json',
-            maxOutputTokens: 2500,
-          },
-          safetySettings: [
-            { category: HarmCategory.HARM_CATEGORY_HARASSMENT, threshold: HarmBlockThreshold.BLOCK_NONE },
-            { category: HarmCategory.HARM_CATEGORY_HATE_SPEECH, threshold: HarmBlockThreshold.BLOCK_NONE },
-          ],
-        });
+  while (attempt < MAX_RETRIES) {
+    attempt++;
+    sawOverload = false;
 
-        const result = await model.generateContent([prompt, imagePart]);
-        const text = result.response.text().trim();
+    // Outer loop: key ระบบก่อน แล้วค่อย key กลางใน DB
+    for (const entry of apiKeys) {
+      const genAI = new GoogleGenerativeAI(entry.key);
+      let keyFailed = false;
 
-        const jsonStr = text
-          .replace(/^```json\s*/i, '')
-          .replace(/^```\s*/i, '')
-          .replace(/\s*```$/i, '')
-          .trim();
+      // Inner loop: ลองทีละโมเดลด้วย key นี้
+      for (const modelName of candidateModels) {
+        try {
+          const model = genAI.getGenerativeModel({
+            model: modelName,
+            generationConfig: {
+              temperature: 0.1,
+              responseMimeType: 'application/json',
+              maxOutputTokens: 2500,
+            },
+            safetySettings: [
+              { category: HarmCategory.HARM_CATEGORY_HARASSMENT, threshold: HarmBlockThreshold.BLOCK_NONE },
+              { category: HarmCategory.HARM_CATEGORY_HATE_SPEECH, threshold: HarmBlockThreshold.BLOCK_NONE },
+            ],
+          });
 
-        return {
-          success: true,
-          data: JSON.parse(jsonStr),
-          usedModel: modelName,
-          usedKeySource: entry.source,
-        };
-      } catch (err: any) {
-        lastError = err;
-        const msg: string = String(err?.message || '');
+          const result = await model.generateContent([prompt, imagePart]);
+          const text = result.response.text().trim();
 
-        const isInvalidKey = /API key not valid|API_KEY_INVALID|API key expired|PERMISSION_DENIED|\[40[013]/i.test(msg);
-        const isQuota = /\[429|429 |quota|RESOURCE_EXHAUSTED|rate limit/i.test(msg);
-        const isModelGone = /\[404|404 |no longer available|is not found/i.test(msg);
-        const isOverload = /\[503|503 |high demand|overloaded|UNAVAILABLE/i.test(msg);
+          const jsonStr = text
+            .replace(/^```json\s*/i, '')
+            .replace(/^```\s*/i, '')
+            .replace(/\s*```$/i, '')
+            .trim();
 
-        if (isInvalidKey) {
-          failures.push({ source: entry.source, kind: 'invalid' });
-          keyFailed = true;
-          break;
+          return {
+            success: true,
+            data: JSON.parse(jsonStr),
+            usedModel: modelName,
+            usedKeySource: entry.source,
+          };
+        } catch (err: any) {
+          lastError = err;
+          const msg: string = String(err?.message || '');
+
+          const isInvalidKey = /API key not valid|API_KEY_INVALID|API key expired|PERMISSION_DENIED|\[40[013]/i.test(msg);
+          const isQuota = /\[429|429 |quota|RESOURCE_EXHAUSTED|rate limit/i.test(msg);
+          const isModelGone = /\[404|404 |no longer available|is not found/i.test(msg);
+          const isOverload = /\[503|503 |high demand|overloaded|UNAVAILABLE/i.test(msg);
+
+          if (isInvalidKey) {
+            failures.push({ source: entry.source, kind: 'invalid' });
+            keyFailed = true;
+            break;
+          }
+          if (isQuota) {
+            console.warn(`Gemini key (${entry.source}) quota/rate limited, switching to next key...`);
+            failures.push({ source: entry.source, kind: 'quota' });
+            keyFailed = true;
+            break;
+          }
+          if (isModelGone) {
+            console.warn(`Model ${modelName} unavailable (404), trying next model...`);
+            continue; // ข้ามไปโมเดลถัดไปทันที
+          }
+          if (isOverload) {
+            sawOverload = true;
+            console.warn(`Model ${modelName} overloaded (503), switching to next model cluster...`);
+            continue; // โมเดลคนใช้เยอะ ข้ามไปโมเดลถัดไปทันที
+          }
+          if (err instanceof SyntaxError) sawBadOutput = true;
+          continue;
         }
-        if (isQuota) {
-          console.warn(`Gemini key (${entry.source}) quota/rate limited, switching to next key...`);
-          failures.push({ source: entry.source, kind: 'quota' });
-          keyFailed = true;
-          break;
-        }
-        if (isModelGone) {
-          console.warn(`Model ${modelName} unavailable (404), trying next model...`);
-          continue; // ข้ามไปโมเดลถัดไปทันที
-        }
-        if (isOverload) {
-          sawOverload = true;
-          continue; // โมเดลคนใช้เยอะ ข้ามไปโมเดลถัดไปทันที
-        }
-        if (err instanceof SyntaxError) sawBadOutput = true;
-        // error อื่น ข้ามไปลองโมเดลถัดไป
-        continue;
       }
+      if (keyFailed) continue;
     }
-    if (keyFailed) continue;
+
+    // หากพบ 503 Overload ชั่วขณะ และยังมีสิทธิ์ retry ให้รอ 1.5 วินาทีแล้วลองใหม่
+    if (sawOverload && attempt < MAX_RETRIES) {
+      console.warn(`All models/keys overloaded on attempt ${attempt}. Waiting 1.5s before retry...`);
+      await new Promise((r) => setTimeout(r, 1500));
+    }
   }
 
   // ทุก key/โมเดลล้มเหลว → ส่ง error แบบมีชนิด ให้หน้าเว็บตัดสินใจ
@@ -177,7 +192,11 @@ async function analyzeImageWithGemini(
     );
   }
   if (sawOverload) {
-    throw new AIError('AI_BUSY', 'ระบบ AI ของ Google กำลังมีผู้ใช้งานหนาแน่น กรุณาลองใหม่อีกครั้งในสักครู่', false);
+    throw new AIError(
+      'AI_BUSY',
+      'เซิร์ฟเวอร์ AI ของ Google กำลังมีผู้ใช้งานหนาแน่นชั่วคราว (Traffic Spike) กรุณากด "ลองสแกนอีกครั้ง" หรือใส่ Gemini API Key สำรองของตนเอง',
+      false
+    );
   }
   if (sawBadOutput) {
     throw new AIError('BAD_IMAGE', 'AI อ่านข้อมูลจากภาพไม่ได้ กรุณาถ่ายภาพใหม่ให้ชัดเจนขึ้น', false);
