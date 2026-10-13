@@ -1212,163 +1212,9 @@ export default function ScanPage() {
               )}
             </div>
           )}
-        </div>
 
-        {/* ---- RIGHT: Staging data (only when scan result exists) ---- */}
-        {scanResult && (
-          <div className="space-y-4">
-            {/* Engine badge */}
-            {engineMsg && (
-              <div className={`p-3 rounded-xl text-xs flex items-start gap-2 ${
-                engine === 'gemini-vision'
-                  ? 'bg-emerald-50 border border-emerald-200 text-emerald-800'
-                  : 'bg-amber-50 border border-amber-200 text-amber-800'
-              }`}>
-                {engine === 'gemini-vision'
-                  ? <CheckCircle2 className="w-4 h-4 shrink-0 mt-0.5" />
-                  : <Info className="w-4 h-4 shrink-0 mt-0.5" />
-                }
-                {engineMsg}
-              </div>
-            )}
-
-            {/* AI Audit & Verification Panel */}
-            <div className={`p-4 rounded-2xl border transition-all ${
-              liveAnomalies.length > 0
-                ? 'bg-amber-50/70 border-amber-200/90 text-amber-950 shadow-sm'
-                : 'bg-emerald-50/70 border-emerald-200/90 text-emerald-950'
-            }`}>
-              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pb-3 border-b border-black/5">
-                <div className="flex items-center gap-2.5">
-                  <div className={`w-8 h-8 rounded-xl flex items-center justify-center shrink-0 ${
-                    liveAnomalies.length > 0 ? 'bg-amber-100 text-amber-700' : 'bg-emerald-100 text-emerald-700'
-                  }`}>
-                    {liveAnomalies.length > 0 ? <AlertCircle className="w-5 h-5" /> : <Sparkles className="w-5 h-5" />}
-                  </div>
-                  <div>
-                    <h4 className="text-xs font-bold text-slate-800 flex items-center gap-1.5 flex-wrap">
-                      <span>การตรวจสอบความถูกต้องและข้อสังเกตจาก AI (AI Audit Report)</span>
-                      {liveAnomalies.length > 0 ? (
-                        <span className="text-[10px] px-2 py-0.5 rounded-full bg-amber-200 text-amber-900 font-semibold">
-                          พบข้อสังเกต {liveAnomalies.length} จุด
-                        </span>
-                      ) : (
-                        <span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-200 text-emerald-900 font-semibold">
-                          ✓ ผ่านการตรวจสอบ
-                        </span>
-                      )}
-                    </h4>
-                    <p className="text-[11px] text-slate-500">
-                      เทียบยอดคำนวณ (ยอดยกมา + รับ - จ่าย = คงเหลือ) และตรวจยอดคงเหลือของล็อตในคลัง
-                    </p>
-                  </div>
-                </div>
-
-                {liveAnomalies.some(a => a.expectedValue !== undefined) && (
-                  <button
-                    type="button"
-                    onClick={handleAutoFixAnomalies}
-                    className="self-start sm:self-auto px-3 py-1.5 bg-amber-600 hover:bg-amber-700 active:scale-95 text-white rounded-lg text-xs font-bold flex items-center gap-1.5 shadow-sm transition"
-                    title="ปรับปรุงยอดคงเหลือในแถวที่มีปัญหาให้ตรงตามหลักคำนวณทันที"
-                  >
-                    <Zap className="w-3.5 h-3.5" />
-                    <span>⚡ ปรับแก้ตัวเลขตามหลักคำนวณอัตโนมัติ</span>
-                  </button>
-                )}
-              </div>
-
-              {/* Warehouse Lot Remaining Badges / Summary */}
-              {lotSummaries.length > 0 && (
-                <div className="pt-3">
-                  <span className="text-[11px] font-bold text-slate-700 block mb-1.5">
-                    📦 สรุปยอดคงเหลือของล็อตในคลัง & ล็อตใหม่ในใบนี้:
-                  </span>
-                  <div className="flex flex-wrap gap-1.5">
-                    {lotSummaries.map((lot, idx) => (
-                      <div
-                        key={idx}
-                        className={`text-xs px-2.5 py-1 rounded-lg border flex items-center gap-1.5 font-mono ${
-                          lot.hasDiscrepancy
-                            ? 'bg-rose-50 border-rose-300 text-rose-900 font-bold'
-                            : lot.isExistingInDb
-                            ? 'bg-blue-50 border-blue-200 text-blue-900'
-                            : 'bg-emerald-50 border-emerald-200 text-emerald-900'
-                        }`}
-                        title={
-                          lot.isExistingInDb
-                            ? `มีในคลังเดิม: คงเหลือ ${lot.warehouseRemaining} ${scanResult.unit || 'kg'} (${lot.warehouseStatus})`
-                            : `ล็อตใหม่: คงเหลือท้ายเอกสาร ${lot.scannedFinalBalance} ${scanResult.unit || 'kg'}`
-                        }
-                      >
-                        <span className="font-bold text-slate-900">{lot.lotNumber}:</span>
-                        {lot.isExistingInDb ? (
-                          <span className="text-blue-700 font-semibold">
-                            คลัง {lot.warehouseRemaining} {scanResult.unit || 'kg'}
-                          </span>
-                        ) : (
-                          <span className="text-emerald-700 font-semibold">
-                            ✨ ล็อตใหม่ ({lot.scannedFinalBalance} {scanResult.unit || 'kg'})
-                          </span>
-                        )}
-                        {lot.scannedOutbound > 0 && (
-                          <span className="text-slate-500 text-[10px]">
-                            (จ่าย -{lot.scannedOutbound})
-                          </span>
-                        )}
-                        {lot.hasDiscrepancy && (
-                          <span className="text-rose-600 text-[10px] font-sans font-bold">⚠️ ยอดคำนวณไม่ตรง</span>
-                        )}
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              )}
-
-              {/* Anomaly list or all-clear notification */}
-              {liveAnomalies.length > 0 ? (
-                <div className="mt-3 pt-3 border-t border-black/5 space-y-1.5">
-                  <span className="text-[11px] font-bold text-amber-900 block mb-1">
-                    ⚠️ ข้อสังเกตความผิดปกติที่ AI ตรวจพบ:
-                  </span>
-                  {liveAnomalies.map((anom, idx) => (
-                    <div
-                      key={idx}
-                      className={`p-2.5 rounded-xl text-xs flex flex-col sm:flex-row sm:items-center justify-between gap-2 border ${
-                        anom.severity === 'error'
-                          ? 'bg-rose-50/90 border-rose-200 text-rose-900'
-                          : anom.severity === 'warning'
-                          ? 'bg-amber-50/90 border-amber-200 text-amber-900'
-                          : 'bg-blue-50/90 border-blue-200 text-blue-900'
-                      }`}
-                    >
-                      <div className="flex items-start gap-2">
-                        <span className="shrink-0 mt-0.5">
-                          {anom.severity === 'error' ? '❌' : anom.severity === 'warning' ? '⚠️' : 'ℹ️'}
-                        </span>
-                        <p className="font-medium leading-relaxed">{anom.message}</p>
-                      </div>
-                      {anom.rowId && anom.expectedValue !== undefined && (
-                        <button
-                          type="button"
-                          onClick={() => handleFixSingleAnomaly(anom.rowId!, anom.expectedValue!)}
-                          className="shrink-0 self-end sm:self-auto px-2 py-1 bg-white hover:bg-amber-100 text-amber-900 border border-amber-300 rounded font-semibold text-[11px] transition shadow-2xs"
-                          title={`ปรับแก้คงเหลือแถวนี้เป็น ${anom.expectedValue}`}
-                        >
-                          แก้เป็น {anom.expectedValue}
-                        </button>
-                      )}
-                    </div>
-                  ))}
-                </div>
-              ) : (
-                <div className="mt-3 pt-2 text-xs text-emerald-800 flex items-center gap-1.5 font-medium">
-                  <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
-                  <span>AI ตรวจสอบความถูกต้องเรียบร้อย: ยอดยกมา / รับ / จ่าย / คงเหลือ และประวัติล็อตในคลังตรงกันสมบูรณ์</span>
-                </div>
-              )}
-            </div>
-
-            {/* Material info */}
+          {/* ข้อมูลวัตถุดิบและเอกสาร (แก้ไขได้) ย้ายมาอยู่คอลัมน์ซ้ายเพื่อใช้พื้นที่ให้คุ้มค่าและสมดุลกับตารางทางขวา */}
+          {scanResult && (
             <div className="bg-white border border-slate-200 rounded-2xl shadow-sm overflow-hidden">
               <div className="px-5 py-3 border-b border-slate-100 bg-slate-50 flex items-center justify-between">
                 <h3 className="text-sm font-bold text-slate-800">ข้อมูลวัตถุดิบ (แก้ไขได้)</h3>
@@ -1510,6 +1356,171 @@ export default function ScanPage() {
                   />
                 </div>
               </div>
+            </div>
+          )}
+        </div>
+
+        {/* ---- RIGHT: Staging data (only when scan result exists) ---- */}
+        {scanResult && (
+          <div className="space-y-4">
+            {/* Engine badge */}
+            {engineMsg && (
+              <div className={`p-3 rounded-xl text-xs flex items-start gap-2 ${
+                engine === 'gemini-vision'
+                  ? 'bg-emerald-50 border border-emerald-200 text-emerald-800'
+                  : 'bg-amber-50 border border-amber-200 text-amber-800'
+              }`}>
+                {engine === 'gemini-vision'
+                  ? <CheckCircle2 className="w-4 h-4 shrink-0 mt-0.5" />
+                  : <Info className="w-4 h-4 shrink-0 mt-0.5" />
+                }
+                {engineMsg}
+              </div>
+            )}
+
+            {/* AI Audit & Verification Panel */}
+            <div className={`p-4 rounded-2xl border transition-all ${
+              liveAnomalies.length > 0
+                ? 'bg-amber-50/70 border-amber-200/90 text-amber-950 shadow-sm'
+                : 'bg-emerald-50/70 border-emerald-200/90 text-emerald-950'
+            }`}>
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pb-3 border-b border-black/5">
+                <div className="flex items-center gap-2.5">
+                  <div className={`w-8 h-8 rounded-xl flex items-center justify-center shrink-0 ${
+                    liveAnomalies.length > 0 ? 'bg-amber-100 text-amber-700' : 'bg-emerald-100 text-emerald-700'
+                  }`}>
+                    {liveAnomalies.length > 0 ? <AlertCircle className="w-5 h-5" /> : <Sparkles className="w-5 h-5" />}
+                  </div>
+                  <div>
+                    <h4 className="text-xs font-bold text-slate-800 flex items-center gap-1.5 flex-wrap">
+                      <span>การตรวจสอบความถูกต้องและข้อสังเกตจาก AI (AI Audit Report)</span>
+                      {liveAnomalies.length > 0 ? (
+                        <span className="text-[10px] px-2 py-0.5 rounded-full bg-amber-200 text-amber-900 font-semibold">
+                          พบข้อสังเกต {liveAnomalies.length} จุด
+                        </span>
+                      ) : (
+                        <span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-200 text-emerald-900 font-semibold">
+                          ✓ ผ่านการตรวจสอบ
+                        </span>
+                      )}
+                    </h4>
+                    <p className="text-[11px] text-slate-500">
+                      เทียบยอดคำนวณ (ยอดยกมา + รับ - จ่าย = คงเหลือ) และตรวจยอดคงเหลือของล็อตในคลัง
+                    </p>
+                  </div>
+                </div>
+
+                {liveAnomalies.some(a => a.expectedValue !== undefined) && (
+                  <button
+                    type="button"
+                    onClick={handleAutoFixAnomalies}
+                    className="self-start sm:self-auto px-3 py-1.5 bg-amber-600 hover:bg-amber-700 active:scale-95 text-white rounded-lg text-xs font-bold flex items-center gap-1.5 shadow-sm transition"
+                    title="ปรับปรุงยอดคงเหลือในแถวที่มีปัญหาให้ตรงตามหลักคำนวณทันที"
+                  >
+                    <Zap className="w-3.5 h-3.5" />
+                    <span>⚡ ปรับแก้ตัวเลขตามหลักคำนวณอัตโนมัติ</span>
+                  </button>
+                )}
+              </div>
+
+              {/* Warehouse Lot Remaining Badges / Summary */}
+              {lotSummaries.length > 0 && (
+                <div className="pt-3">
+                  <span className="text-[11px] font-bold text-slate-700 block mb-1.5">
+                    📦 สรุปยอดคงเหลือของล็อตในคลัง & ล็อตใหม่ในใบนี้:
+                  </span>
+                  <div className="flex flex-wrap gap-1.5">
+                    {lotSummaries.map((lot, idx) => (
+                      <div
+                        key={idx}
+                        className={`text-xs px-2.5 py-1 rounded-lg border flex items-center gap-1.5 font-mono ${
+                          lot.hasDiscrepancy
+                            ? 'bg-rose-50 border-rose-300 text-rose-900 font-bold'
+                            : lot.isExistingInDb
+                            ? 'bg-blue-50 border-blue-200 text-blue-900'
+                            : 'bg-emerald-50 border-emerald-200 text-emerald-900'
+                        }`}
+                        title={
+                          lot.isExistingInDb
+                            ? `มีในคลังเดิม: คงเหลือ ${lot.warehouseRemaining} ${scanResult.unit || 'kg'} (${lot.warehouseStatus})`
+                            : `ล็อตใหม่: คงเหลือท้ายเอกสาร ${lot.scannedFinalBalance} ${scanResult.unit || 'kg'}`
+                        }
+                      >
+                        <span className="font-bold text-slate-900">{lot.lotNumber}:</span>
+                        {lot.isExistingInDb ? (
+                          <span className="text-blue-700 font-semibold">
+                            คลัง {lot.warehouseRemaining} {scanResult.unit || 'kg'}
+                          </span>
+                        ) : (
+                          <span className="text-emerald-700 font-semibold">
+                            ✨ ล็อตใหม่ ({lot.scannedFinalBalance} {scanResult.unit || 'kg'})
+                          </span>
+                        )}
+                        {lot.scannedOutbound > 0 && (
+                          <span className="text-slate-500 text-[10px]">
+                            (จ่าย -{lot.scannedOutbound})
+                          </span>
+                        )}
+                        {lot.hasDiscrepancy && (
+                          <span className="text-rose-600 text-[10px] font-sans font-bold">⚠️ ยอดคำนวณไม่ตรง</span>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* Anomaly list or all-clear notification (scrollable for compact viewing) */}
+              {liveAnomalies.length > 0 ? (
+                <div className="mt-3 pt-3 border-t border-black/5 space-y-1.5">
+                  <div className="flex items-center justify-between">
+                    <span className="text-[11px] font-bold text-amber-900 block">
+                      ⚠️ ข้อสังเกตความผิดปกติที่ AI ตรวจพบ ({liveAnomalies.length} จุด):
+                    </span>
+                    {liveAnomalies.length > 3 && (
+                      <span className="text-[10px] text-amber-700 font-medium">
+                        (เลื่อนดูเพิ่มเติมในกล่องได้)
+                      </span>
+                    )}
+                  </div>
+                  <div className="max-h-52 overflow-y-auto pr-1 space-y-1.5">
+                    {liveAnomalies.map((anom, idx) => (
+                      <div
+                        key={idx}
+                        className={`p-2.5 rounded-xl text-xs flex flex-col sm:flex-row sm:items-center justify-between gap-2 border ${
+                          anom.severity === 'error'
+                            ? 'bg-rose-50/90 border-rose-200 text-rose-900'
+                            : anom.severity === 'warning'
+                            ? 'bg-amber-50/90 border-amber-200 text-amber-900'
+                            : 'bg-blue-50/90 border-blue-200 text-blue-900'
+                        }`}
+                      >
+                        <div className="flex items-start gap-2">
+                          <span className="shrink-0 mt-0.5">
+                            {anom.severity === 'error' ? '❌' : anom.severity === 'warning' ? '⚠️' : 'ℹ️'}
+                          </span>
+                          <p className="font-medium leading-relaxed">{anom.message}</p>
+                        </div>
+                        {anom.rowId && anom.expectedValue !== undefined && (
+                          <button
+                            type="button"
+                            onClick={() => handleFixSingleAnomaly(anom.rowId!, anom.expectedValue!)}
+                            className="shrink-0 self-end sm:self-auto px-2 py-1 bg-white hover:bg-amber-100 text-amber-900 border border-amber-300 rounded font-semibold text-[11px] transition shadow-2xs"
+                            title={`ปรับแก้คงเหลือแถวนี้เป็น ${anom.expectedValue}`}
+                          >
+                            แก้เป็น {anom.expectedValue}
+                          </button>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ) : (
+                <div className="mt-3 pt-2 text-xs text-emerald-800 flex items-center gap-1.5 font-medium">
+                  <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+                  <span>AI ตรวจสอบความถูกต้องเรียบร้อย: ยอดยกมา / รับ / จ่าย / คงเหลือ และประวัติล็อตในคลังตรงกันสมบูรณ์</span>
+                </div>
+              )}
             </div>
 
             {/* Staging table & cards */}

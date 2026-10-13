@@ -14,11 +14,22 @@ import {
   ScanLine
 } from 'lucide-react';
 
+interface MaterialLot {
+  id: string;
+  lotNumber: string;
+  quantityRemaining: number;
+  initialQuantity?: number;
+  expDate?: string | null;
+  mfgDate?: string | null;
+  status: string;
+}
+
 interface Material {
   id: string;
   code: string;
   name: string;
   baseUnit: string;
+  lots?: MaterialLot[];
 }
 
 function InboundForm() {
@@ -28,6 +39,7 @@ function InboundForm() {
 
   const [materials, setMaterials] = useState<Material[]>([]);
   const [materialId, setMaterialId] = useState(preselectedMaterialId);
+  const [lotSelectionMode, setLotSelectionMode] = useState<string>('__NEW__');
   const [lotNumber, setLotNumber] = useState('');
   const [receiveDate, setReceiveDate] = useState(new Date().toISOString().split('T')[0]);
   const [mfgDate, setMfgDate] = useState('');
@@ -56,6 +68,34 @@ function InboundForm() {
   }, []);
 
   const selectedMaterial = materials.find((m) => m.id === materialId);
+
+  const handleMaterialChange = (newMatId: string) => {
+    setMaterialId(newMatId);
+    setLotSelectionMode('__NEW__');
+    setLotNumber('');
+  };
+
+  const handleLotSelect = (val: string) => {
+    setLotSelectionMode(val);
+    if (val === '__NEW__') {
+      setLotNumber('');
+    } else {
+      setLotNumber(val);
+      const chosen = selectedMaterial?.lots?.find((l) => l.lotNumber === val);
+      if (chosen) {
+        if (chosen.expDate) {
+          try {
+            setExpDate(new Date(chosen.expDate).toISOString().split('T')[0]);
+          } catch {}
+        }
+        if (chosen.mfgDate) {
+          try {
+            setMfgDate(new Date(chosen.mfgDate).toISOString().split('T')[0]);
+          } catch {}
+        }
+      }
+    }
+  };
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -130,17 +170,19 @@ function InboundForm() {
       {successInfo && (
         <div className="p-4 bg-emerald-50 border border-emerald-200 rounded-xl flex items-center justify-between">
           <div className="flex items-center gap-3">
-            <CheckCircle2 className="w-5 h-5 text-emerald-600" />
+            <CheckCircle2 className="w-5 h-5 text-emerald-600 shrink-0" />
             <div>
-              <p className="text-sm font-bold text-emerald-900">บันทึกรับเข้าเรียบร้อยแล้ว!</p>
+              <p className="text-sm font-bold text-emerald-900">
+                {successInfo.isExistingLot ? 'รับเข้าเพิ่มในล็อตเดิมเรียบร้อยแล้ว!' : 'สร้างล็อตใหม่และรับเข้าเรียบร้อยแล้ว!'}
+              </p>
               <p className="text-xs text-emerald-700">
-                ล็อต <strong>{successInfo.lot.lotNumber}</strong> จำนวน {successInfo.lot.initialQuantity} เพิ่มเข้าสู่คลังสำเร็จ
+                ล็อต <strong>{successInfo.lot.lotNumber}</strong> จำนวน +{successInfo.transaction.quantity} {selectedMaterial?.baseUnit || ''} (ยอดคงเหลือรวมในล็อตนี้: {successInfo.lot.quantityRemaining} {selectedMaterial?.baseUnit || ''})
               </p>
             </div>
           </div>
           <Link
             href="/inventory"
-            className="text-xs font-bold text-emerald-800 bg-emerald-100 hover:bg-emerald-200 px-3 py-1.5 rounded-lg"
+            className="text-xs font-bold text-emerald-800 bg-emerald-100 hover:bg-emerald-200 px-3 py-1.5 rounded-lg shrink-0"
           >
             ดูสต็อกคงเหลือ
           </Link>
@@ -169,7 +211,7 @@ function InboundForm() {
             </div>
             <select
               value={materialId}
-              onChange={(e) => setMaterialId(e.target.value)}
+              onChange={(e) => handleMaterialChange(e.target.value)}
               className="w-full px-3 py-2 text-sm border border-slate-200 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none font-medium"
             >
               {materials.map((m) => (
@@ -180,19 +222,79 @@ function InboundForm() {
             </select>
           </div>
 
-          <div>
-            <label className="block text-xs font-bold text-slate-700 mb-1">
-              เลขล็อต / แบทช์ (Lot / Batch No.) *
-            </label>
-            <input
-              type="text"
-              required
-              placeholder="เช่น 100726, 080826 หรือ BATCH-2026-01"
-              value={lotNumber}
-              onChange={(e) => setLotNumber(e.target.value)}
-              className="w-full px-3 py-2 text-sm font-mono border border-slate-200 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none"
-            />
-          </div>
+          {/* เลขล็อต: ตัวเลือกเลือกล็อตเดิมที่มี หรือ สร้างล็อตใหม่ */}
+          {selectedMaterial?.lots && selectedMaterial.lots.length > 0 ? (
+            <div className="sm:col-span-2 space-y-2.5 p-4 bg-slate-50/90 rounded-2xl border border-slate-200">
+              <div className="flex items-center justify-between">
+                <label className="block text-xs font-bold text-slate-800">
+                  เลขล็อต / แบทช์ (Lot / Batch No.) *
+                </label>
+                {lotSelectionMode !== '__NEW__' && (
+                  <span className="text-[11px] font-semibold text-blue-700 bg-blue-100 px-2.5 py-0.5 rounded-full">
+                    📦 รับเข้าเพิ่มในล็อตเดิม
+                  </span>
+                )}
+              </div>
+
+              <div>
+                <select
+                  value={lotSelectionMode}
+                  onChange={(e) => handleLotSelect(e.target.value)}
+                  className="w-full px-3 py-2 text-sm font-semibold border border-slate-200 rounded-lg bg-white focus:ring-2 focus:ring-blue-500 outline-none text-slate-800"
+                >
+                  <option value="__NEW__">✨ สร้างล็อตใหม่ / อื่น ๆ (พิมพ์เลขล็อตเอง)</option>
+                  {selectedMaterial.lots.map((l) => (
+                    <option key={l.id} value={l.lotNumber}>
+                      ล็อต {l.lotNumber} — ในคลังมีคงเหลือ {l.quantityRemaining} {selectedMaterial.baseUnit} {l.expDate ? `(EXP: ${new Date(l.expDate).toLocaleDateString('th-TH')})` : ''}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              {lotSelectionMode === '__NEW__' ? (
+                <div className="pt-1">
+                  <label className="block text-[11px] font-semibold text-slate-600 mb-1">
+                    ระบุเลขล็อตใหม่ *
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    placeholder="เช่น 100726, 080826 หรือ BATCH-2026-01"
+                    value={lotNumber}
+                    onChange={(e) => setLotNumber(e.target.value)}
+                    className="w-full px-3 py-2 text-sm font-mono border border-slate-200 rounded-lg bg-white focus:ring-2 focus:ring-blue-500 outline-none"
+                  />
+                  <p className="text-[10px] text-slate-400 mt-1">
+                    หากต้องการเลือกล็อตเดิมที่มีอยู่แล้ว สามารถเปลี่ยนตัวเลือกที่กล่องด้านบนได้
+                  </p>
+                </div>
+              ) : (
+                <div className="p-3 bg-white border border-blue-200 rounded-xl flex items-center justify-between text-xs">
+                  <div>
+                    <span className="text-slate-500">ล็อตที่เลือก:</span>{' '}
+                    <strong className="font-mono text-blue-800 font-bold text-sm">{lotNumber}</strong>
+                  </div>
+                  <span className="text-[11px] text-blue-600 font-medium">
+                    (ระบบจะบวกยอดเข้าล็อตนี้อัตโนมัติ)
+                  </span>
+                </div>
+              )}
+            </div>
+          ) : (
+            <div>
+              <label className="block text-xs font-bold text-slate-700 mb-1">
+                เลขล็อต / แบทช์ (Lot / Batch No.) *
+              </label>
+              <input
+                type="text"
+                required
+                placeholder="เช่น 100726, 080826 หรือ BATCH-2026-01"
+                value={lotNumber}
+                onChange={(e) => setLotNumber(e.target.value)}
+                className="w-full px-3 py-2 text-sm font-mono border border-slate-200 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none"
+              />
+            </div>
+          )}
 
           <div>
             <label className="block text-xs font-bold text-slate-700 mb-1">

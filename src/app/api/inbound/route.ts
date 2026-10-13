@@ -34,23 +34,51 @@ export async function POST(request: Request) {
     const qty = Number(quantity);
 
     const result = await prisma.$transaction(async (tx) => {
-      // 1. Create or add to MaterialLot
-      const lot = await tx.materialLot.create({
-        data: {
+      // 1. Check if lot already exists for this material
+      const existingLot = await tx.materialLot.findFirst({
+        where: {
           materialId,
           lotNumber: String(lotNumber).trim(),
-          receiveDate: receiveDate ? new Date(receiveDate) : new Date(),
-          mfgDate: mfgDate ? new Date(mfgDate) : null,
-          expDate: expDate ? new Date(expDate) : null,
-          initialQuantity: qty,
-          quantityRemaining: qty,
-          costPerUnit: costPerUnit ? Number(costPerUnit) : 0,
-          status: 'ACTIVE',
         },
         include: {
           material: true,
         },
       });
+
+      let lot;
+      if (existingLot) {
+        lot = await tx.materialLot.update({
+          where: { id: existingLot.id },
+          data: {
+            initialQuantity: existingLot.initialQuantity + qty,
+            quantityRemaining: existingLot.quantityRemaining + qty,
+            status: 'ACTIVE',
+            ...(mfgDate ? { mfgDate: new Date(mfgDate) } : {}),
+            ...(expDate ? { expDate: new Date(expDate) } : {}),
+            ...(costPerUnit ? { costPerUnit: Number(costPerUnit) } : {}),
+          },
+          include: {
+            material: true,
+          },
+        });
+      } else {
+        lot = await tx.materialLot.create({
+          data: {
+            materialId,
+            lotNumber: String(lotNumber).trim(),
+            receiveDate: receiveDate ? new Date(receiveDate) : new Date(),
+            mfgDate: mfgDate ? new Date(mfgDate) : null,
+            expDate: expDate ? new Date(expDate) : null,
+            initialQuantity: qty,
+            quantityRemaining: qty,
+            costPerUnit: costPerUnit ? Number(costPerUnit) : 0,
+            status: 'ACTIVE',
+          },
+          include: {
+            material: true,
+          },
+        });
+      }
 
       // 2. Create StockTransaction
       const transaction = await tx.stockTransaction.create({
@@ -59,7 +87,7 @@ export async function POST(request: Request) {
           lotId: lot.id,
           type: 'INBOUND',
           quantity: qty,
-          lotBalanceAfter: qty,
+          lotBalanceAfter: lot.quantityRemaining,
           documentRef: documentRef || null,
           remarks: remarks || null,
           createdBy: userLabel,
@@ -67,7 +95,7 @@ export async function POST(request: Request) {
         },
       });
 
-      return { lot, transaction };
+      return { lot, transaction, isExistingLot: !!existingLot };
     });
 
     // Write Audit Log (awaited)
