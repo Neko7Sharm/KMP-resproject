@@ -14,6 +14,21 @@ export interface StockRow {
   remarks: string;
 }
 
+export interface AiAnomaly {
+  type: 'MATH_MISMATCH' | 'WAREHOUSE_STOCK' | 'NEGATIVE_QTY' | 'INFO';
+  severity: 'warning' | 'info' | 'error';
+  rowId?: string;
+  lotNumber?: string;
+  message: string;
+  expectedValue?: number;
+}
+
+export interface ExistingLotInfo {
+  lotNumber: string;
+  currentRemaining: number;
+  status: string;
+}
+
 export interface ScanResult {
   materialName: string;
   unit: string;
@@ -24,6 +39,8 @@ export interface ScanResult {
   creator: string;
   position: string;
   rows: StockRow[];
+  anomalies?: AiAnomaly[];
+  existingLots?: ExistingLotInfo[];
 }
 
 interface ScanContextType {

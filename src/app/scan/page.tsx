@@ -9,7 +9,7 @@ import {
   ArrowRight, Package, History, Sparkles, Zap, Camera, Video,
   Grid, List, Maximize2, Minimize2, Smartphone, Focus, ClipboardPaste
 } from 'lucide-react';
-import { useScan, StockRow, ScanResult } from '@/context/ScanContext';
+import { useScan, StockRow, ScanResult, AiAnomaly, ExistingLotInfo } from '@/context/ScanContext';
 import { optimizeImageForOCR } from '@/lib/imageOptimizer';
 
 interface Section { id: string; code: string; name: string; }
@@ -20,6 +20,11 @@ interface Material {
   baseUnit: string;
   sectionId: string | null;
   section?: Section | null;
+  lots?: Array<{
+    lotNumber: string;
+    quantityRemaining: number;
+    status: string;
+  }>;
 }
 
 // ---------- Main Page ----------
@@ -100,10 +105,16 @@ export default function ScanPage() {
         setSelectedSectionId(matched.sectionId);
       }
       if (currentScan) {
+        const enrichedLots: ExistingLotInfo[] = (matched.lots || []).map(l => ({
+          lotNumber: l.lotNumber,
+          currentRemaining: l.quantityRemaining,
+          status: l.status,
+        }));
         setScanResult({
           ...currentScan,
           materialName: matched.name,
           unit: matched.baseUnit || currentScan.unit,
+          existingLots: enrichedLots.length > 0 ? enrichedLots : currentScan.existingLots,
         });
       }
     }
@@ -126,6 +137,13 @@ export default function ScanPage() {
       }
       resData.materialName = matched.name;
       if (matched.baseUnit) resData.unit = matched.baseUnit;
+      if (matched.lots && matched.lots.length > 0 && (!resData.existingLots || resData.existingLots.length === 0)) {
+        resData.existingLots = matched.lots.map(l => ({
+          lotNumber: l.lotNumber,
+          currentRemaining: l.quantityRemaining,
+          status: l.status,
+        }));
+      }
     }
   };
 
@@ -399,6 +417,214 @@ export default function ScanPage() {
     if (!scanResult) return;
     setScanResult({ ...scanResult, rows: scanResult.rows.filter(r => r.id !== rowId) });
   };
+
+  // คำนวณและตรวจสอบความถูกต้องทางคณิตศาสตร์และเทียบสต็อกแบบ Real-time
+  const liveAnomalies = (() => {
+    if (!scanResult || !scanResult.rows || scanResult.rows.length === 0) return [];
+    const anomalies: AiAnomaly[] = [];
+
+    const lotRunningBal = new Map<string, number>();
+    const existingMap = new Map<string, ExistingLotInfo>();
+    (scanResult.existingLots || []).forEach(l => existingMap.set(l.lotNumber.toUpperCase().trim(), l));
+
+    scanResult.rows.forEach((row, idx) => {
+      const lotNum = String(row.lotNumber || '').trim();
+      const inQty = Number(row.inboundQty) || 0;
+      const outQty = Number(row.outboundQty) || 0;
+      const balQty = Number(row.balanceQty) || 0;
+      const rowNum = idx + 1;
+      const dateStr = row.date || 'ไม่ระบุวันที่';
+
+      if (inQty < 0 || outQty < 0 || balQty < 0) {
+        anomalies.push({
+          type: 'NEGATIVE_QTY',
+          severity: 'error',
+          rowId: row.id,
+          lotNumber: lotNum,
+          message: `แถวที่ ${rowNum} (${dateStr}): มีตัวเลขติดลบ (รับ: ${inQty}, จ่าย: ${outQty}, คงเหลือ: ${balQty})`,
+        });
+      }
+
+      if (!lotNum) {
+        anomalies.push({
+          type: 'INFO',
+          severity: 'warning',
+          rowId: row.id,
+          lotNumber: '',
+          message: `แถวที่ ${rowNum} (${dateStr}): ไม่ได้ระบุเลขล็อตในเอกสาร`,
+        });
+        return;
+      }
+
+      const lotKey = lotNum.toUpperCase();
+      const prevBal = lotRunningBal.get(lotKey);
+      const existing = existingMap.get(lotKey);
+
+      if (inQty > 0) {
+        const nextBal = (prevBal !== undefined ? prevBal : 0) + inQty;
+        if (balQty > 0 && Math.abs(balQty - nextBal) > 0.01) {
+          anomalies.push({
+            type: 'MATH_MISMATCH',
+            severity: 'warning',
+            rowId: row.id,
+            lotNumber: lotNum,
+            message: `แถวที่ ${rowNum} (${dateStr}, ล็อต ${lotNum}): รับเข้า +${inQty} ยอดคงเหลือควรเป็น ${nextBal} แต่ในตารางอ่านได้ ${balQty}`,
+            expectedValue: nextBal,
+          });
+        }
+        lotRunningBal.set(lotKey, balQty > 0 ? balQty : nextBal);
+      } else if (outQty > 0) {
+        if (prevBal !== undefined) {
+          const expected = Math.max(0, prevBal - outQty);
+          if (Math.abs(balQty - expected) > 0.01) {
+            anomalies.push({
+              type: 'MATH_MISMATCH',
+              severity: 'warning',
+              rowId: row.id,
+              lotNumber: lotNum,
+              message: `แถวที่ ${rowNum} (${dateStr}, ล็อต ${lotNum}): จ่ายออก -${outQty} จากคงเหลือเดิม ${prevBal} ยอดคงเหลือควรเป็น ${expected} แต่ในตารางอ่านได้ ${balQty}`,
+              expectedValue: expected,
+            });
+          }
+          lotRunningBal.set(lotKey, balQty > 0 ? balQty : expected);
+        } else {
+          if (existing) {
+            const expected = Math.max(0, existing.currentRemaining - outQty);
+            if (balQty > 0 && Math.abs(balQty - expected) > 0.01) {
+              anomalies.push({
+                type: 'WAREHOUSE_STOCK',
+                severity: 'info',
+                rowId: row.id,
+                lotNumber: lotNum,
+                message: `ล็อต ${lotNum} มีในคลังเดิม (ยอดในคลังปัจจุบัน ${existing.currentRemaining} ${scanResult.unit || 'kg'}) จ่ายออก -${outQty} คงเหลือตามคลังควรเป็น ${expected} แต่ในเอกสารระบุ ${balQty}`,
+                expectedValue: expected,
+              });
+            }
+            lotRunningBal.set(lotKey, balQty > 0 ? balQty : expected);
+          } else {
+            lotRunningBal.set(lotKey, balQty);
+          }
+        }
+      } else if (balQty > 0) {
+        lotRunningBal.set(lotKey, balQty);
+      }
+    });
+
+    return anomalies;
+  })();
+
+  // ปรับแก้ตัวเลขตามหลักคณิตศาสตร์ให้อัตโนมัติในคลิกเดียว
+  const handleAutoFixAnomalies = () => {
+    if (!scanResult) return;
+    const fixMap = new Map<string, number>();
+    liveAnomalies.forEach(a => {
+      if (a.rowId && a.expectedValue !== undefined) {
+        fixMap.set(a.rowId, a.expectedValue);
+      }
+    });
+
+    if (fixMap.size === 0) return;
+
+    setScanResult({
+      ...scanResult,
+      rows: scanResult.rows.map(r => {
+        if (fixMap.has(r.id)) {
+          const val = fixMap.get(r.id)!;
+          return {
+            ...r,
+            balanceQty: val,
+            totalQty: val,
+          };
+        }
+        return r;
+      }),
+    });
+  };
+
+  // ปรับแก้ตัวเลขเฉพาะแถวที่ต้องการ
+  const handleFixSingleAnomaly = (rowId: string, expectedVal: number) => {
+    if (!scanResult) return;
+    setScanResult({
+      ...scanResult,
+      rows: scanResult.rows.map(r => {
+        if (r.id === rowId) {
+          return {
+            ...r,
+            balanceQty: expectedVal,
+            totalQty: expectedVal,
+          };
+        }
+        return r;
+      }),
+    });
+  };
+
+  // รวมรวมสถานะและยอดคงเหลือของแต่ละล็อต (ทั้งในคลังเดิมและในใบนี้)
+  const lotSummaries = (() => {
+    if (!scanResult) return [];
+    const map = new Map<string, {
+      lotNumber: string;
+      warehouseRemaining?: number;
+      warehouseStatus?: string;
+      isExistingInDb: boolean;
+      scannedInbound: number;
+      scannedOutbound: number;
+      scannedFinalBalance: number;
+      hasDiscrepancy: boolean;
+    }>();
+
+    // 1. Existing lots from DB
+    (scanResult.existingLots || []).forEach(l => {
+      const k = l.lotNumber.toUpperCase().trim();
+      if (k) {
+        map.set(k, {
+          lotNumber: l.lotNumber,
+          warehouseRemaining: l.currentRemaining,
+          warehouseStatus: l.status,
+          isExistingInDb: true,
+          scannedInbound: 0,
+          scannedOutbound: 0,
+          scannedFinalBalance: 0,
+          hasDiscrepancy: false,
+        });
+      }
+    });
+
+    // 2. Scan rows
+    (scanResult.rows || []).forEach(r => {
+      const k = String(r.lotNumber || '').toUpperCase().trim();
+      if (!k) return;
+      const entry = map.get(k) || {
+        lotNumber: r.lotNumber,
+        isExistingInDb: false,
+        scannedInbound: 0,
+        scannedOutbound: 0,
+        scannedFinalBalance: 0,
+        hasDiscrepancy: false,
+      };
+      entry.scannedInbound += Number(r.inboundQty) || 0;
+      entry.scannedOutbound += Number(r.outboundQty) || 0;
+      if (Number(r.balanceQty) > 0) {
+        entry.scannedFinalBalance = Number(r.balanceQty);
+      }
+      map.set(k, entry);
+    });
+
+    // 3. Mark discrepancies
+    liveAnomalies.forEach(a => {
+      if (a.lotNumber) {
+        const k = a.lotNumber.toUpperCase().trim();
+        if (map.has(k)) {
+          map.get(k)!.hasDiscrepancy = true;
+        }
+      }
+    });
+
+    return Array.from(map.values()).filter(l => {
+      const appearsInScan = scanResult.rows.some(r => String(r.lotNumber || '').toUpperCase().trim() === l.lotNumber.toUpperCase().trim());
+      return appearsInScan || (l.warehouseRemaining !== undefined && l.warehouseRemaining > 0);
+    });
+  })();
 
   // Normalize date input to DD/MM/YYYY with 4-digit CE year
   const normalizeDateToCE = (val: string): string => {
@@ -987,6 +1213,142 @@ export default function ScanPage() {
               </div>
             )}
 
+            {/* AI Audit & Verification Panel */}
+            <div className={`p-4 rounded-2xl border transition-all ${
+              liveAnomalies.length > 0
+                ? 'bg-amber-50/70 border-amber-200/90 text-amber-950 shadow-sm'
+                : 'bg-emerald-50/70 border-emerald-200/90 text-emerald-950'
+            }`}>
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pb-3 border-b border-black/5">
+                <div className="flex items-center gap-2.5">
+                  <div className={`w-8 h-8 rounded-xl flex items-center justify-center shrink-0 ${
+                    liveAnomalies.length > 0 ? 'bg-amber-100 text-amber-700' : 'bg-emerald-100 text-emerald-700'
+                  }`}>
+                    {liveAnomalies.length > 0 ? <AlertCircle className="w-5 h-5" /> : <Sparkles className="w-5 h-5" />}
+                  </div>
+                  <div>
+                    <h4 className="text-xs font-bold text-slate-800 flex items-center gap-1.5 flex-wrap">
+                      <span>การตรวจสอบความถูกต้องและข้อสังเกตจาก AI (AI Audit Report)</span>
+                      {liveAnomalies.length > 0 ? (
+                        <span className="text-[10px] px-2 py-0.5 rounded-full bg-amber-200 text-amber-900 font-semibold">
+                          พบข้อสังเกต {liveAnomalies.length} จุด
+                        </span>
+                      ) : (
+                        <span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-200 text-emerald-900 font-semibold">
+                          ✓ ผ่านการตรวจสอบ
+                        </span>
+                      )}
+                    </h4>
+                    <p className="text-[11px] text-slate-500">
+                      เทียบยอดคำนวณ (ยอดยกมา + รับ - จ่าย = คงเหลือ) และตรวจยอดคงเหลือของล็อตในคลัง
+                    </p>
+                  </div>
+                </div>
+
+                {liveAnomalies.some(a => a.expectedValue !== undefined) && (
+                  <button
+                    type="button"
+                    onClick={handleAutoFixAnomalies}
+                    className="self-start sm:self-auto px-3 py-1.5 bg-amber-600 hover:bg-amber-700 active:scale-95 text-white rounded-lg text-xs font-bold flex items-center gap-1.5 shadow-sm transition"
+                    title="ปรับปรุงยอดคงเหลือในแถวที่มีปัญหาให้ตรงตามหลักคำนวณทันที"
+                  >
+                    <Zap className="w-3.5 h-3.5" />
+                    <span>⚡ ปรับแก้ตัวเลขตามหลักคำนวณอัตโนมัติ</span>
+                  </button>
+                )}
+              </div>
+
+              {/* Warehouse Lot Remaining Badges / Summary */}
+              {lotSummaries.length > 0 && (
+                <div className="pt-3">
+                  <span className="text-[11px] font-bold text-slate-700 block mb-1.5">
+                    📦 สรุปยอดคงเหลือของล็อตในคลัง & ล็อตใหม่ในใบนี้:
+                  </span>
+                  <div className="flex flex-wrap gap-1.5">
+                    {lotSummaries.map((lot, idx) => (
+                      <div
+                        key={idx}
+                        className={`text-xs px-2.5 py-1 rounded-lg border flex items-center gap-1.5 font-mono ${
+                          lot.hasDiscrepancy
+                            ? 'bg-rose-50 border-rose-300 text-rose-900 font-bold'
+                            : lot.isExistingInDb
+                            ? 'bg-blue-50 border-blue-200 text-blue-900'
+                            : 'bg-emerald-50 border-emerald-200 text-emerald-900'
+                        }`}
+                        title={
+                          lot.isExistingInDb
+                            ? `มีในคลังเดิม: คงเหลือ ${lot.warehouseRemaining} ${scanResult.unit || 'kg'} (${lot.warehouseStatus})`
+                            : `ล็อตใหม่: คงเหลือท้ายเอกสาร ${lot.scannedFinalBalance} ${scanResult.unit || 'kg'}`
+                        }
+                      >
+                        <span className="font-bold text-slate-900">{lot.lotNumber}:</span>
+                        {lot.isExistingInDb ? (
+                          <span className="text-blue-700 font-semibold">
+                            คลัง {lot.warehouseRemaining} {scanResult.unit || 'kg'}
+                          </span>
+                        ) : (
+                          <span className="text-emerald-700 font-semibold">
+                            ✨ ล็อตใหม่ ({lot.scannedFinalBalance} {scanResult.unit || 'kg'})
+                          </span>
+                        )}
+                        {lot.scannedOutbound > 0 && (
+                          <span className="text-slate-500 text-[10px]">
+                            (จ่าย -{lot.scannedOutbound})
+                          </span>
+                        )}
+                        {lot.hasDiscrepancy && (
+                          <span className="text-rose-600 text-[10px] font-sans font-bold">⚠️ ยอดคำนวณไม่ตรง</span>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* Anomaly list or all-clear notification */}
+              {liveAnomalies.length > 0 ? (
+                <div className="mt-3 pt-3 border-t border-black/5 space-y-1.5">
+                  <span className="text-[11px] font-bold text-amber-900 block mb-1">
+                    ⚠️ ข้อสังเกตความผิดปกติที่ AI ตรวจพบ:
+                  </span>
+                  {liveAnomalies.map((anom, idx) => (
+                    <div
+                      key={idx}
+                      className={`p-2.5 rounded-xl text-xs flex flex-col sm:flex-row sm:items-center justify-between gap-2 border ${
+                        anom.severity === 'error'
+                          ? 'bg-rose-50/90 border-rose-200 text-rose-900'
+                          : anom.severity === 'warning'
+                          ? 'bg-amber-50/90 border-amber-200 text-amber-900'
+                          : 'bg-blue-50/90 border-blue-200 text-blue-900'
+                      }`}
+                    >
+                      <div className="flex items-start gap-2">
+                        <span className="shrink-0 mt-0.5">
+                          {anom.severity === 'error' ? '❌' : anom.severity === 'warning' ? '⚠️' : 'ℹ️'}
+                        </span>
+                        <p className="font-medium leading-relaxed">{anom.message}</p>
+                      </div>
+                      {anom.rowId && anom.expectedValue !== undefined && (
+                        <button
+                          type="button"
+                          onClick={() => handleFixSingleAnomaly(anom.rowId!, anom.expectedValue!)}
+                          className="shrink-0 self-end sm:self-auto px-2 py-1 bg-white hover:bg-amber-100 text-amber-900 border border-amber-300 rounded font-semibold text-[11px] transition shadow-2xs"
+                          title={`ปรับแก้คงเหลือแถวนี้เป็น ${anom.expectedValue}`}
+                        >
+                          แก้เป็น {anom.expectedValue}
+                        </button>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div className="mt-3 pt-2 text-xs text-emerald-800 flex items-center gap-1.5 font-medium">
+                  <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+                  <span>AI ตรวจสอบความถูกต้องเรียบร้อย: ยอดยกมา / รับ / จ่าย / คงเหลือ และประวัติล็อตในคลังตรงกันสมบูรณ์</span>
+                </div>
+              )}
+            </div>
+
             {/* Material info */}
             <div className="bg-white border border-slate-200 rounded-2xl shadow-sm overflow-hidden">
               <div className="px-5 py-3 border-b border-slate-100 bg-slate-50 flex items-center justify-between">
@@ -1194,8 +1556,8 @@ export default function ScanPage() {
                     >
                       {/* Card Header */}
                       <div className="flex items-center justify-between pb-2.5 mb-2.5 border-b border-slate-100">
-                        <div className="flex items-center gap-2">
-                          <span className="w-6 h-6 rounded-full bg-purple-100 text-purple-700 font-bold font-mono text-xs flex items-center justify-center">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <span className="w-6 h-6 rounded-full bg-purple-100 text-purple-700 font-bold font-mono text-xs flex items-center justify-center shrink-0">
                             {idx + 1}
                           </span>
                           <span className="text-xs font-bold text-slate-700">Lot:</span>
@@ -1204,8 +1566,22 @@ export default function ScanPage() {
                             value={row.lotNumber}
                             placeholder="Lot No."
                             onChange={e => updateRow(row.id, 'lotNumber', e.target.value)}
-                            className="px-2 py-1 bg-purple-50/50 border border-purple-200 rounded-lg text-xs font-mono font-bold text-purple-900 w-32 focus:ring-1 focus:ring-purple-500 outline-none"
+                            className="px-2 py-1 bg-purple-50/50 border border-purple-200 rounded-lg text-xs font-mono font-bold text-purple-900 w-28 focus:ring-1 focus:ring-purple-500 outline-none"
                           />
+                          {(() => {
+                            const lotKey = String(row.lotNumber || '').toUpperCase().trim();
+                            const existing = lotKey ? (scanResult.existingLots || []).find(l => l.lotNumber.toUpperCase().trim() === lotKey) : null;
+                            if (!lotKey) return null;
+                            return existing ? (
+                              <span className="text-[10px] bg-blue-50 text-blue-700 border border-blue-200 px-1.5 py-0.5 rounded font-mono font-semibold" title={`ยอดคงเหลือในคลัง: ${existing.currentRemaining} ${scanResult.unit || 'kg'} (${existing.status})`}>
+                                📦 คลัง: {existing.currentRemaining}
+                              </span>
+                            ) : (
+                              <span className="text-[10px] bg-emerald-50 text-emerald-700 border border-emerald-200 px-1.5 py-0.5 rounded font-mono font-medium">
+                                ✨ ล็อตใหม่
+                              </span>
+                            );
+                          })()}
                         </div>
                         <div className="flex items-center gap-1">
                           {imageURL && (
@@ -1350,13 +1726,32 @@ export default function ScanPage() {
                           </td>
                           {/* Lot */}
                           <td className="px-1.5 py-1">
-                            <input
-                              type="text"
-                              value={row.lotNumber}
-                              placeholder="เช่น 100726"
-                              onChange={e => updateRow(row.id, 'lotNumber', e.target.value)}
-                              className="w-24 px-2 py-1 bg-slate-50 hover:bg-white focus:bg-white border border-transparent hover:border-slate-200 focus:border-purple-500 rounded text-xs font-bold font-mono text-purple-900 outline-none transition"
-                            />
+                            <div className="flex flex-col gap-0.5">
+                              <input
+                                type="text"
+                                value={row.lotNumber}
+                                placeholder="เช่น 100726"
+                                onChange={e => updateRow(row.id, 'lotNumber', e.target.value)}
+                                className="w-24 px-2 py-1 bg-slate-50 hover:bg-white focus:bg-white border border-transparent hover:border-slate-200 focus:border-purple-500 rounded text-xs font-bold font-mono text-purple-900 outline-none transition"
+                              />
+                              {(() => {
+                                const lotKey = String(row.lotNumber || '').toUpperCase().trim();
+                                const existing = lotKey ? (scanResult.existingLots || []).find(l => l.lotNumber.toUpperCase().trim() === lotKey) : null;
+                                if (!lotKey) return null;
+                                return existing ? (
+                                  <span
+                                    className="text-[9px] bg-blue-50 text-blue-700 border border-blue-200 px-1 py-0.2 rounded font-mono text-center font-semibold truncate max-w-[96px]"
+                                    title={`ยอดคงเหลือในคลัง: ${existing.currentRemaining} ${scanResult.unit || 'kg'} (${existing.status})`}
+                                  >
+                                    คลัง: {existing.currentRemaining}
+                                  </span>
+                                ) : (
+                                  <span className="text-[9px] bg-emerald-50 text-emerald-700 border border-emerald-200 px-1 py-0.2 rounded font-mono text-center font-medium max-w-[96px]">
+                                    ล็อตใหม่
+                                  </span>
+                                );
+                              })()}
+                            </div>
                           </td>
                           {/* Inbound */}
                           <td className="px-1.5 py-1">

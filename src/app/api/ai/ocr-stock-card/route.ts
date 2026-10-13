@@ -506,6 +506,113 @@ function reconcileBalances(rows: any[]): any[] {
   });
 }
 
+// ---- Audit Scanned Rows: ตรวจสอบความถูกต้องทางคณิตศาสตร์และเทียบกับสต็อกในคลัง ----
+export interface AiAnomaly {
+  type: 'MATH_MISMATCH' | 'WAREHOUSE_STOCK' | 'NEGATIVE_QTY' | 'INFO';
+  severity: 'warning' | 'info' | 'error';
+  rowId?: string;
+  lotNumber?: string;
+  message: string;
+  expectedValue?: number;
+}
+
+export interface ExistingLotInfo {
+  lotNumber: string;
+  currentRemaining: number;
+  status: string;
+}
+
+function auditScannedRows(rows: any[], existingLots: ExistingLotInfo[]): AiAnomaly[] {
+  const anomalies: AiAnomaly[] = [];
+  const lotRunningBal = new Map<string, number>();
+  const existingMap = new Map<string, ExistingLotInfo>();
+  existingLots.forEach((l) => existingMap.set(l.lotNumber.toUpperCase().trim(), l));
+
+  rows.forEach((row, idx) => {
+    const lotNum = String(row.lotNumber || '').trim();
+    const inQty = Number(row.inboundQty) || 0;
+    const outQty = Number(row.outboundQty) || 0;
+    const balQty = Number(row.balanceQty) || 0;
+    const rowNum = idx + 1;
+    const dateStr = row.date || 'ไม่ระบุวันที่';
+
+    if (inQty < 0 || outQty < 0 || balQty < 0) {
+      anomalies.push({
+        type: 'NEGATIVE_QTY',
+        severity: 'error',
+        rowId: row.id,
+        lotNumber: lotNum,
+        message: `แถวที่ ${rowNum} (${dateStr}): มีตัวเลขติดลบ (รับ: ${inQty}, จ่าย: ${outQty}, คงเหลือ: ${balQty})`,
+      });
+    }
+
+    if (!lotNum) {
+      anomalies.push({
+        type: 'INFO',
+        severity: 'warning',
+        rowId: row.id,
+        message: `แถวที่ ${rowNum} (${dateStr}): ไม่พบเลขล็อตในเอกสาร`,
+      });
+      return;
+    }
+
+    const lotKey = lotNum.toUpperCase();
+    const prevBal = lotRunningBal.get(lotKey);
+    const existing = existingMap.get(lotKey);
+
+    if (inQty > 0) {
+      const nextBal = (prevBal !== undefined ? prevBal : 0) + inQty;
+      if (balQty > 0 && Math.abs(balQty - nextBal) > 0.01) {
+        anomalies.push({
+          type: 'MATH_MISMATCH',
+          severity: 'warning',
+          rowId: row.id,
+          lotNumber: lotNum,
+          message: `แถวที่ ${rowNum} (${dateStr}, ล็อต ${lotNum}): รับเข้า ${inQty} ยอดคงเหลือคำนวณควรเป็น ${nextBal} แต่ในตารางอ่านได้ ${balQty}`,
+          expectedValue: nextBal,
+        });
+      }
+      lotRunningBal.set(lotKey, balQty > 0 ? balQty : nextBal);
+    } else if (outQty > 0) {
+      if (prevBal !== undefined) {
+        const expected = Math.max(0, prevBal - outQty);
+        if (Math.abs(balQty - expected) > 0.01) {
+          anomalies.push({
+            type: 'MATH_MISMATCH',
+            severity: 'warning',
+            rowId: row.id,
+            lotNumber: lotNum,
+            message: `แถวที่ ${rowNum} (${dateStr}, ล็อต ${lotNum}): จ่ายออก ${outQty} จากคงเหลือเดิม ${prevBal} ยอดคงเหลือคำนวณควรเป็น ${expected} แต่ในตารางอ่านได้ ${balQty}`,
+            expectedValue: expected,
+          });
+        }
+        lotRunningBal.set(lotKey, balQty > 0 ? balQty : expected);
+      } else {
+        if (existing) {
+          const expected = Math.max(0, existing.currentRemaining - outQty);
+          if (balQty > 0 && Math.abs(balQty - expected) > 0.01) {
+            anomalies.push({
+              type: 'WAREHOUSE_STOCK',
+              severity: 'info',
+              rowId: row.id,
+              lotNumber: lotNum,
+              message: `ล็อต ${lotNum} มีในคลังเดิม (คงเหลือปัจจุบันในคลัง ${existing.currentRemaining}) จ่ายออก ${outQty} คงเหลือตามคลังคือ ${expected} แต่ในเอกสารระบุ ${balQty}`,
+              expectedValue: expected,
+            });
+          }
+          lotRunningBal.set(lotKey, balQty > 0 ? balQty : expected);
+        } else {
+          lotRunningBal.set(lotKey, balQty);
+        }
+      }
+    } else if (balQty > 0) {
+      lotRunningBal.set(lotKey, balQty);
+    }
+  });
+
+  return anomalies;
+}
+
 // ---- POST Handler ----
 export async function POST(request: Request) {
   try {
@@ -552,6 +659,32 @@ export async function POST(request: Request) {
           data.sheetNumber = parsedForm.sheetNumber;
         }
         data.formYearInfo = parsedForm.formYearInfo || (data.formYear ? `ปี ค.ศ. ${data.formYear}` : '');
+
+        // ค้นหาข้อมูลล็อตเดิมในคลังของวัตถุดิบนี้ (หากมีในระบบ) เพื่อนำมาตรวจสอบและแสดงยอดคงเหลือ
+        let existingLots: ExistingLotInfo[] = [];
+        if (data.materialName) {
+          const cleanName = data.materialName.trim();
+          const existingMat = await prisma.material.findFirst({
+            where: {
+              name: { equals: cleanName },
+            },
+            include: {
+              lots: {
+                select: { lotNumber: true, quantityRemaining: true, status: true },
+              },
+            },
+          });
+          if (existingMat && existingMat.lots) {
+            existingLots = existingMat.lots.map((l) => ({
+              lotNumber: l.lotNumber,
+              currentRemaining: l.quantityRemaining,
+              status: l.status,
+            }));
+          }
+        }
+
+        data.existingLots = existingLots;
+        data.anomalies = auditScannedRows(data.rows, existingLots);
 
         return NextResponse.json({
           success: true,
