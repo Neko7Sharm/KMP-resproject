@@ -99,53 +99,68 @@ function ActionMenu({
   onEdit,
   onInbound,
   onDelete,
+  isOpen,
+  onToggle,
 }: {
   onEdit: () => void;
   onInbound: () => void;
   onDelete: () => void;
+  isOpen?: boolean;
+  onToggle?: (open: boolean) => void;
 }) {
-  const [open, setOpen] = useState(false);
+  const [internalOpen, setInternalOpen] = useState(false);
+  const open = isOpen !== undefined ? isOpen : internalOpen;
+  const setOpen = (v: boolean | ((prev: boolean) => boolean)) => {
+    const nextVal = typeof v === 'function' ? v(open) : v;
+    if (onToggle) onToggle(nextVal);
+    else setInternalOpen(nextVal);
+  };
   const ref = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     function handler(e: MouseEvent) {
-      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+      if (ref.current && !ref.current.contains(e.target as Node)) {
+        if (onToggle) onToggle(false);
+        else setInternalOpen(false);
+      }
     }
     document.addEventListener('mousedown', handler);
     return () => document.removeEventListener('mousedown', handler);
-  }, []);
+  }, [onToggle]);
 
   return (
-    <div ref={ref} className="relative" onClick={(e) => e.stopPropagation()}>
+    <div ref={ref} className={`relative ${open ? 'z-50' : ''}`} onClick={(e) => e.stopPropagation()}>
       <button
         onClick={() => setOpen((v) => !v)}
-        className="p-1.5 rounded-lg text-slate-400 hover:text-slate-700 hover:bg-slate-100 transition"
+        className={`p-1.5 rounded-lg transition ${
+          open ? 'text-slate-800 bg-slate-100 ring-2 ring-slate-200' : 'text-slate-400 hover:text-slate-700 hover:bg-slate-100'
+        }`}
         title="จัดการ"
       >
         <MoreVertical className="w-4 h-4" />
       </button>
       {open && (
-        <div className="absolute right-0 top-full mt-1 w-44 bg-white rounded-xl shadow-lg border border-slate-200 py-1 z-30">
+        <div className="absolute right-0 top-full mt-1.5 w-48 bg-white rounded-xl shadow-xl border border-slate-200 py-1.5 z-50 animate-in fade-in zoom-in-95 duration-100">
           <button
             onClick={() => { setOpen(false); onEdit(); }}
-            className="flex items-center gap-2.5 w-full px-4 py-2.5 text-sm text-slate-700 hover:bg-slate-50 transition"
+            className="flex items-center gap-2.5 w-full px-4 py-2.5 text-xs sm:text-sm font-medium text-slate-700 hover:bg-slate-50 transition"
           >
             <Edit2 className="w-4 h-4 text-slate-400" />
             แก้ไขข้อมูล
           </button>
           <button
             onClick={() => { setOpen(false); onInbound(); }}
-            className="flex items-center gap-2.5 w-full px-4 py-2.5 text-sm text-slate-700 hover:bg-slate-50 transition"
+            className="flex items-center gap-2.5 w-full px-4 py-2.5 text-xs sm:text-sm font-medium text-slate-700 hover:bg-slate-50 transition"
           >
-            <ArrowDownToLine className="w-4 h-4 text-blue-400" />
+            <ArrowDownToLine className="w-4 h-4 text-blue-500" />
             รับเข้าล็อตใหม่
           </button>
           <div className="my-1 border-t border-slate-100" />
           <button
             onClick={() => { setOpen(false); onDelete(); }}
-            className="flex items-center gap-2.5 w-full px-4 py-2.5 text-sm text-rose-600 hover:bg-rose-50 transition"
+            className="flex items-center gap-2.5 w-full px-4 py-2.5 text-xs sm:text-sm font-medium text-rose-600 hover:bg-rose-50 transition"
           >
-            <Trash2 className="w-4 h-4" />
+            <Trash2 className="w-4 h-4 text-rose-500" />
             ลบวัตถุดิบนี้
           </button>
         </div>
@@ -227,6 +242,9 @@ export default function InventoryPage() {
   const [initialQuantity, setInitialQuantity] = useState('');
   const [initialExpDate, setInitialExpDate] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
+
+  // Active ActionMenu dropdown tracking
+  const [openMenuMaterialId, setOpenMenuMaterialId] = useState<string | null>(null);
 
   // Edit Material Modal
   const [editingMaterial, setEditingMaterial] = useState<Material | null>(null);
@@ -531,11 +549,18 @@ export default function InventoryPage() {
             const stockPct = totalInitial > 0 ? Math.min(100, Math.round((m.totalStock / totalInitial) * 100)) : 0;
 
             return (
-              <div key={m.id} className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
+              <div
+                key={m.id}
+                className={`bg-white rounded-xl border border-slate-200 shadow-sm transition-all ${
+                  openMenuMaterialId === m.id ? 'z-30 relative' : 'relative'
+                }`}
+              >
                 {/* Card Header */}
                 <div
                   onClick={() => toggleExpand(m.id)}
-                  className="px-4 py-3.5 flex items-center gap-3 cursor-pointer hover:bg-slate-50/80 transition"
+                  className={`px-4 py-3.5 flex items-center gap-3 cursor-pointer hover:bg-slate-50/80 transition ${
+                    isExpanded ? 'rounded-t-xl' : 'rounded-xl'
+                  }`}
                 >
                   {/* Expand chevron */}
                   <button className="p-0.5 rounded text-slate-400 hover:text-slate-600 shrink-0">
@@ -595,6 +620,8 @@ export default function InventoryPage() {
                     )}
                     {canEdit && (
                       <ActionMenu
+                        isOpen={openMenuMaterialId === m.id}
+                        onToggle={(open) => setOpenMenuMaterialId(open ? m.id : null)}
                         onEdit={() => openEditMaterial(m)}
                         onInbound={() => navigateToInbound(m.id)}
                         onDelete={() => setDeletingMaterial(m)}
@@ -605,7 +632,7 @@ export default function InventoryPage() {
 
                 {/* Expanded Lots Table */}
                 {isExpanded && (
-                  <div className="border-t border-slate-100 bg-slate-50/40 p-4">
+                  <div className="border-t border-slate-100 bg-slate-50/40 p-4 rounded-b-xl">
                     <div className="flex items-center justify-between mb-2.5">
                       <div>
                         <h4 className="text-xs font-bold text-slate-700 uppercase tracking-wider">
