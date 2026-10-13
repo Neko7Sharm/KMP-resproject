@@ -70,12 +70,16 @@ async function analyzeImageWithGemini(
 กฎสำคัญ:
 - ช่องที่เขียน "-" ให้ใส่ 0
 - ช่องที่เขียนเครื่องหมายฟันหนู (") หรือ "   " หรือ " (" หรือ ditto ให้คัดลอกค่า lotNumber ของบรรทัดก่อนหน้ามาใช้แทน
-- ***สำคัญมากเรื่องปีและวันที่***:
+- ***สำคัญมากเรื่องวันที่และการจ่ายรวมช่วงวันที่***:
+  * ในช่อง วัน/เดือน/ปี มักพบการบันทึกแบบจ่ายรวมช่วงวันที่ เช่น "1-22/6" (หมายถึง จ่ายรวมตั้งแต่วันที่ 1 ถึง 22 ของเดือน 6) หรือ "8-21/7" (วันที่ 8 ถึง 21 ของเดือน 7)
+    - ให้สกัดช่วงวันที่ไว้ครบถ้วน เช่น "1-22/06/2026" หรือ "8-21/07/2026" โดยนำปี ค.ศ. 4 หลักจากฟอร์มมาต่อท้ายเสมอ
+  * หากในช่องวันที่เขียนเพียง วัน/เดือน (ไม่มีปี) เช่น "19/8", "24/8", "2/9", "1/10" ให้นำปี ค.ศ. จากฟอร์มหรือเลขที่ใบ (เช่น 2026 จาก 002/26) มาต่อท้ายเป็น "19/08/2026", "24/08/2026", "02/09/2026", "01/10/2026"
+  * หากช่องวันที่เขียนเครื่องหมายฟันหนู (") หรือเว้นว่าง ให้คัดลอกวันที่ของบรรทัดก่อนหน้ามาใช้
   * ปีในทุกช่องทั้ง date และ expDate ต้องเป็นปี คริสต์ศักราช (ค.ศ. / CE / A.D.) 4 หลักเสมอ เช่น 2024, 2025, 2026, 2027
   * หากในเอกสารเป็นปี พ.ศ. (เช่น 2568, 2569) ให้คำนวณแปลงเป็น ค.ศ. เสมอ (ลบ 543 เช่น 2569 -> 2026, 2568 -> 2025)
   * หากในเอกสารเขียนปี พ.ศ. แบบ 2 หลัก (เช่น 68, 69) ให้แปลงเป็น ค.ศ. (เช่น 68 -> 2025, 69 -> 2026)
   * หากในเอกสารเขียนปี ค.ศ. แบบ 2 หลัก (เช่น 26, 27) ให้แปลงเป็น ค.ศ. 4 หลัก (เช่น 2026, 2027)
-- ช่อง date: ต้องเป็น format "วว/ดด/ปปปป" โดยที่ "ปปปป" ต้องเป็นปี ค.ศ. 4 หลักเท่านั้น (เช่น 07/08/2026) ห้ามเป็น พ.ศ.
+- ช่อง date: เป็น format "วว/ดด/ปปปป" หรือหากเป็นช่วงวันที่ให้เป็น "วว-วว/ดด/ปปปป" (เช่น 01-22/06/2026) โดยที่ "ปปปป" ต้องเป็นปี ค.ศ. 4 หลักเท่านั้น ห้ามเป็น พ.ศ.
 - ช่อง expDate: สกัดวันหมดอายุ EXP จากช่องหมายเหตุหรือช่องระบุวันหมดอายุ ถ้ามี ให้ใส่ใน expDate เป็น format "DD-MM-YYYY" โดยที่ปีต้องเป็น ค.ศ. 4 หลักเท่านั้น (เช่น 19-08-2027) ถ้าไม่มีให้เป็น ""
 - ***สำคัญมากเรื่องยอดคงเหลือ (balanceQty และ totalQty) ในเอกสาร Stock Card (FR 1-6)***:
   * ในเอกสารมี 2 คอลัมน์ที่ต้องแยกจากกันอย่างชัดเจน:
@@ -108,7 +112,7 @@ async function analyzeImageWithGemini(
   "rows": [
     {
       "id": "row-1",
-      "date": "วว/ดด/ปปปป (ปี ค.ศ. 4 หลัก เช่น 07/08/2026)",
+      "date": "วว/ดด/ปปปป หรือ วว-วว/ดด/ปปปป (ปี ค.ศ. 4 หลัก เช่น 01-22/06/2026 หรือ 19/08/2026)",
       "lotNumber": "รหัสล็อต",
       "inboundQty": 0,
       "outboundQty": 0,
@@ -343,12 +347,36 @@ function convertYearToCE(rawYear: number): number {
 }
 
 // ---- Normalize Date to DD/MM/YYYY with 4-digit CE year ----
-function normalizeDateStr(rawDate: string): string {
+// ---- Normalize Date to DD/MM/YYYY or DD-DD/MM/YYYY with 4-digit CE year ----
+function normalizeDateStr(rawDate: string, defaultYear?: number | null): string {
   if (!rawDate || typeof rawDate !== 'string') return '';
   const trimmed = rawDate.trim();
   if (!trimmed) return '';
 
-  // Match YYYY-MM-DD
+  const fallbackYear = defaultYear && defaultYear >= 1900 && defaultYear <= 2100
+    ? defaultYear
+    : new Date().getFullYear();
+
+  // 1. Date Range with Year: e.g. "1-22/6/2026", "1-22/06/26", "01-22/06/2026"
+  const rangeYearMatch = trimmed.match(/^(\d{1,2})\s*[-–—]\s*(\d{1,2})\s*[\/\-\.]\s*(\d{1,2})\s*[\/\-\.]\s*(\d{2,4})$/);
+  if (rangeYearMatch) {
+    const d1 = String(parseInt(rangeYearMatch[1])).padStart(2, '0');
+    const d2 = String(parseInt(rangeYearMatch[2])).padStart(2, '0');
+    const m = String(parseInt(rangeYearMatch[3])).padStart(2, '0');
+    const y = convertYearToCE(parseInt(rangeYearMatch[4]));
+    return `${d1}-${d2}/${m}/${y}`;
+  }
+
+  // 2. Date Range WITHOUT Year: e.g. "1-22/6", "8-21/7", "01-22/06"
+  const rangeNoYearMatch = trimmed.match(/^(\d{1,2})\s*[-–—]\s*(\d{1,2})\s*[\/\-\.]\s*(\d{1,2})$/);
+  if (rangeNoYearMatch) {
+    const d1 = String(parseInt(rangeNoYearMatch[1])).padStart(2, '0');
+    const d2 = String(parseInt(rangeNoYearMatch[2])).padStart(2, '0');
+    const m = String(parseInt(rangeNoYearMatch[3])).padStart(2, '0');
+    return `${d1}-${d2}/${m}/${fallbackYear}`;
+  }
+
+  // 3. Match YYYY-MM-DD
   const isoMatch = trimmed.match(/^(\d{2,4})[-\/\.](\d{1,2})[-\/\.](\d{1,2})$/);
   if (isoMatch && parseInt(isoMatch[1]) > 31) {
     const y = convertYearToCE(parseInt(isoMatch[1]));
@@ -357,13 +385,21 @@ function normalizeDateStr(rawDate: string): string {
     return `${d}/${m}/${y}`;
   }
 
-  // Match DD/MM/YYYY or DD-MM-YYYY or DD.MM.YYYY
+  // 4. Match DD/MM/YYYY or DD-MM-YYYY or DD.MM.YYYY
   const dmyMatch = trimmed.match(/^(\d{1,2})[-\/\.](\d{1,2})[-\/\.](\d{2,4})$/);
   if (dmyMatch) {
     const d = String(parseInt(dmyMatch[1])).padStart(2, '0');
     const m = String(parseInt(dmyMatch[2])).padStart(2, '0');
     const y = convertYearToCE(parseInt(dmyMatch[3]));
     return `${d}/${m}/${y}`;
+  }
+
+  // 5. Match Single Date WITHOUT Year: e.g. "19/8", "24/8", "2/9", "1/10"
+  const dmNoYearMatch = trimmed.match(/^(\d{1,2})\s*[\/\-\.]\s*(\d{1,2})$/);
+  if (dmNoYearMatch) {
+    const d = String(parseInt(dmNoYearMatch[1])).padStart(2, '0');
+    const m = String(parseInt(dmNoYearMatch[2])).padStart(2, '0');
+    return `${d}/${m}/${fallbackYear}`;
   }
 
   return trimmed;
@@ -430,26 +466,18 @@ function parseFormNumber(cardNoStr: string): { sheetNumber: string; formYear: nu
   return { sheetNumber: '', formYear: null, formYearInfo: '' };
 }
 
-// ---- Normalize all dates in scanned rows to CE year ----
-function normalizeAllDatesToCE(rows: any[]): any[] {
-  return rows.map((row) => ({
-    ...row,
-    date: normalizeDateStr(row.date),
-    expDate: normalizeExpDateStr(row.expDate, row.remarks),
-  }));
-}
-
-// ---- Smart Lot Number resolution ----
-function resolveLotNumbers(rows: any[]): any[] {
+// ---- Smart Lot Number & Date resolution (handle ditto marks like " or empty) ----
+function resolveDatesAndLots(rows: any[]): any[] {
   let lastLot = '';
+  let lastDate = '';
   return rows.map((row) => {
+    // 1. Resolve Lot Number
     const lotRaw = String(row.lotNumber || '').trim();
     if (
       lotRaw === '' ||
       lotRaw === '"' ||
       lotRaw === '″' ||
       lotRaw === 'n' ||
-      lotRaw === '"' ||
       lotRaw.toLowerCase() === 'ditto' ||
       lotRaw === '\u201d' ||
       lotRaw === '\u2033'
@@ -458,8 +486,36 @@ function resolveLotNumbers(rows: any[]): any[] {
     } else {
       lastLot = lotRaw;
     }
+
+    // 2. Resolve Date (e.g. ditto mark " under 1-22/6 or 11/9)
+    const dateRaw = String(row.date || '').trim();
+    if (
+      dateRaw === '' ||
+      dateRaw === '"' ||
+      dateRaw === '″' ||
+      dateRaw === 'n' ||
+      dateRaw.toLowerCase() === 'ditto' ||
+      dateRaw === '\u201d' ||
+      dateRaw === '\u2033'
+    ) {
+      if (lastDate) {
+        row.date = lastDate;
+      }
+    } else {
+      lastDate = row.date;
+    }
+
     return row;
   });
+}
+
+// ---- Normalize all dates in scanned rows to CE year ----
+function normalizeAllDatesToCE(rows: any[], defaultYear?: number | null): any[] {
+  return rows.map((row) => ({
+    ...row,
+    date: normalizeDateStr(row.date, defaultYear),
+    expDate: normalizeExpDateStr(row.expDate, row.remarks),
+  }));
 }
 
 // ---- Reconcile and calculate lot running balance ----
@@ -642,16 +698,19 @@ export async function POST(request: Request) {
       try {
         const aiResult = await analyzeImageWithGemini(imageBase64, mimeType || 'image/jpeg', apiKeys);
         const data = aiResult.data;
-        data.rows = resolveLotNumbers(data.rows || []);
-        data.rows = normalizeAllDatesToCE(data.rows);
-        data.rows = reconcileBalances(data.rows);
 
         // Extract or enrich formYear and sheetNumber from cardNo (e.g. 01/26 -> sheet 01, year 2026)
         const parsedForm = parseFormNumber(data.cardNo || '');
+        const targetYear = data.formYear ? convertYearToCE(Number(data.formYear)) : parsedForm.formYear;
+
+        data.rows = resolveDatesAndLots(data.rows || []);
+        data.rows = normalizeAllDatesToCE(data.rows, targetYear);
+        data.rows = reconcileBalances(data.rows);
+
         if (!data.formYear && parsedForm.formYear) {
           data.formYear = parsedForm.formYear;
         } else if (data.formYear) {
-          data.formYear = convertYearToCE(Number(data.formYear));
+          data.formYear = targetYear;
         }
         if (!data.sheetNumber && parsedForm.sheetNumber) {
           data.sheetNumber = parsedForm.sheetNumber;
@@ -763,21 +822,34 @@ export async function POST(request: Request) {
             balQty = totQty;
           }
 
-          // Parse date (support Christian AD and Buddhist BE years like 2568, 68)
+          // Parse date (support date ranges like 1-22/06/2026, single dates 19/08/2026, and BE years)
           let txDate = new Date();
+          let dateRemarksNote = '';
           if (row.date) {
-            const parts = row.date.split(/[\/\-\.]/);
-            if (parts.length === 3) {
-              let y = parseInt(parts[2]);
-              const m = parseInt(parts[1]) - 1;
-              const d = parseInt(parts[0]);
-              if (y > 2400) y -= 543; // Buddhist Era: e.g. 2568 -> 2025, 2569 -> 2026
-              else if (y < 100) {
-                // If 2 digits like '68' or '69', assume Buddhist Era if > 40
-                if (y >= 40) y = (y + 2500) - 543;
-                else y += 2000;
+            const rawDateStr = String(row.date).trim();
+            // 1. Check for date range: e.g. "1-22/06/2026" or "01-22/06/2026" or "1-22/6"
+            const rangeMatch = rawDateStr.match(/^(\d{1,2})\s*[-–—]\s*(\d{1,2})\s*[\/\-\.]\s*(\d{1,2})(?:\s*[\/\-\.]\s*(\d{2,4}))?$/);
+            if (rangeMatch) {
+              const startD = parseInt(rangeMatch[1]);
+              const endD = parseInt(rangeMatch[2]);
+              const mo = parseInt(rangeMatch[3]) - 1;
+              let y = rangeMatch[4] ? parseInt(rangeMatch[4]) : (formYear || new Date().getFullYear());
+              if (y > 2400) y -= 543;
+              else if (y < 100) y = y >= 40 ? (y + 2500) - 543 : 2000 + y;
+              // ใช้วันที่สิ้นสุดของรอบการจ่ายรวมเป็น transactionDate
+              txDate = new Date(y, mo, endD);
+              dateRemarksNote = `(ยอดจ่ายรวมวันที่ ${startD}-${endD}/${mo + 1}/${y})`;
+            } else {
+              // 2. Standard single date
+              const parts = rawDateStr.split(/[\/\-\.]/);
+              if (parts.length >= 2) {
+                const d = parseInt(parts[0]);
+                const mo = parseInt(parts[1]) - 1;
+                let y = parts[2] ? parseInt(parts[2]) : (formYear || new Date().getFullYear());
+                if (y > 2400) y -= 543;
+                else if (y < 100) y = y >= 40 ? (y + 2500) - 543 : 2000 + y;
+                txDate = new Date(y, mo, d);
               }
-              txDate = new Date(y, m, d);
             }
           }
 
@@ -876,6 +948,9 @@ export async function POST(request: Request) {
           const finalLotBal = balQty > 0 ? balQty : (targetLot ? targetLot.quantityRemaining : 0);
 
           // Write transaction record
+          const finalInRemark = [row.remarks, dateRemarksNote].filter(Boolean).join(' ').trim() || `รับเข้าล็อต ${lotNum}`;
+          const finalOutRemark = [row.remarks, dateRemarksNote].filter(Boolean).join(' ').trim() || `จ่ายออกล็อต ${lotNum}`;
+
           if (inQty > 0) {
             await tx.stockTransaction.create({
               data: {
@@ -887,7 +962,7 @@ export async function POST(request: Request) {
                 totalStockAfter: totQty > 0 ? totQty : finalLotBal,
                 transactionDate: txDate,
                 documentRef: documentRef || 'STOCK-CARD-IMPORT',
-                remarks: row.remarks || `รับเข้าล็อต ${lotNum}`,
+                remarks: finalInRemark,
                 createdBy: finalCreator,
               },
             });
@@ -903,7 +978,7 @@ export async function POST(request: Request) {
                 totalStockAfter: totQty > 0 ? totQty : finalLotBal,
                 transactionDate: txDate,
                 documentRef: documentRef || 'STOCK-CARD-IMPORT',
-                remarks: row.remarks || `จ่ายออกล็อต ${lotNum}`,
+                remarks: finalOutRemark,
                 createdBy: finalCreator,
               },
             });

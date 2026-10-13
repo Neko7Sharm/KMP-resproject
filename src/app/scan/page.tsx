@@ -622,11 +622,36 @@ export default function ScanPage() {
     });
   })();
 
-  // Normalize date input to DD/MM/YYYY with 4-digit CE year
+  // Normalize date input to DD/MM/YYYY or DD-DD/MM/YYYY with 4-digit CE year
   const normalizeDateToCE = (val: string): string => {
     if (!val) return '';
     const trimmed = val.trim();
-    // YYYY-MM-DD
+    const fallbackYear = scanResult?.formYear && scanResult.formYear >= 1900 && scanResult.formYear <= 2100
+      ? scanResult.formYear
+      : new Date().getFullYear();
+
+    // 1. Date Range with Year: e.g. "1-22/6/2026", "1-22/06/26", "01-22/06/2026"
+    const rangeYearMatch = trimmed.match(/^(\d{1,2})\s*[-–—]\s*(\d{1,2})\s*[\/\-\.]\s*(\d{1,2})\s*[\/\-\.]\s*(\d{2,4})$/);
+    if (rangeYearMatch) {
+      const d1 = String(parseInt(rangeYearMatch[1])).padStart(2, '0');
+      const d2 = String(parseInt(rangeYearMatch[2])).padStart(2, '0');
+      const m = String(parseInt(rangeYearMatch[3])).padStart(2, '0');
+      let y = parseInt(rangeYearMatch[4]);
+      if (y > 2400) y -= 543;
+      else if (y < 100) y = y >= 40 ? (y + 2500) - 543 : 2000 + y;
+      return `${d1}-${d2}/${m}/${y}`;
+    }
+
+    // 2. Date Range WITHOUT Year: e.g. "1-22/6", "8-21/7", "01-22/06"
+    const rangeNoYearMatch = trimmed.match(/^(\d{1,2})\s*[-–—]\s*(\d{1,2})\s*[\/\-\.]\s*(\d{1,2})$/);
+    if (rangeNoYearMatch) {
+      const d1 = String(parseInt(rangeNoYearMatch[1])).padStart(2, '0');
+      const d2 = String(parseInt(rangeNoYearMatch[2])).padStart(2, '0');
+      const m = String(parseInt(rangeNoYearMatch[3])).padStart(2, '0');
+      return `${d1}-${d2}/${m}/${fallbackYear}`;
+    }
+
+    // 3. YYYY-MM-DD
     const isoMatch = trimmed.match(/^(\d{2,4})[-\/\.](\d{1,2})[-\/\.](\d{1,2})$/);
     if (isoMatch && parseInt(isoMatch[1]) > 31) {
       let y = parseInt(isoMatch[1]);
@@ -636,7 +661,8 @@ export default function ScanPage() {
       const d = String(parseInt(isoMatch[3])).padStart(2, '0');
       return `${d}/${m}/${y}`;
     }
-    // DD/MM/YYYY
+
+    // 4. DD/MM/YYYY
     const dmyMatch = trimmed.match(/^(\d{1,2})[-\/\.](\d{1,2})[-\/\.](\d{2,4})$/);
     if (dmyMatch) {
       const d = String(parseInt(dmyMatch[1])).padStart(2, '0');
@@ -646,6 +672,15 @@ export default function ScanPage() {
       else if (y < 100) y = y >= 40 ? (y + 2500) - 543 : 2000 + y;
       return `${d}/${m}/${y}`;
     }
+
+    // 5. Single Date WITHOUT Year: e.g. "19/8", "24/8", "2/9", "1/10"
+    const dmNoYearMatch = trimmed.match(/^(\d{1,2})\s*[\/\-\.]\s*(\d{1,2})$/);
+    if (dmNoYearMatch) {
+      const d = String(parseInt(dmNoYearMatch[1])).padStart(2, '0');
+      const m = String(parseInt(dmNoYearMatch[2])).padStart(2, '0');
+      return `${d}/${m}/${fallbackYear}`;
+    }
+
     return trimmed;
   };
 
@@ -676,11 +711,22 @@ export default function ScanPage() {
     return trimmed;
   };
 
-  // เปลี่ยนปีในสตริงวันที่ (รองรับทั้ง DD/MM/YYYY, DD-MM-YYYY, DD.MM.YYYY)
+  // เปลี่ยนปีในสตริงวันที่ (รองรับทั้งช่วงวันที่ DD-DD/MM/YYYY, DD/MM/YYYY, DD-MM-YYYY)
   const replaceYearInDate = (dateStr: string, newYear: number): string => {
     if (!dateStr || !newYear) return dateStr;
     const trimmed = dateStr.trim();
-    // แมตช์ วัน/เดือน/ปี เช่น 07/08/2026 หรือ 07-08-2025
+
+    // 1. แมตช์ช่วงวันที่ เช่น 01-22/06/2026 หรือ 1-22-06-2025
+    const rangeMatch = trimmed.match(/^(\d{1,2}\s*[-–—]\s*\d{1,2})([-\/\.])(\d{1,2})([-\/\.])(\d{2,4})$/);
+    if (rangeMatch) {
+      const r = rangeMatch[1];
+      const sep1 = rangeMatch[2];
+      const mo = rangeMatch[3].padStart(2, '0');
+      const sep2 = rangeMatch[4];
+      return `${r}${sep1}${mo}${sep2}${newYear}`;
+    }
+
+    // 2. แมตช์วันเดี่ยว เช่น 07/08/2026 หรือ 19/08/2025
     const m = trimmed.match(/^(\d{1,2})([-\/\.])(\d{1,2})([-\/\.])(\d{2,4})$/);
     if (m) {
       const d = m[1].padStart(2, '0');
@@ -689,6 +735,19 @@ export default function ScanPage() {
       const sep2 = m[4];
       return `${d}${sep1}${mo}${sep2}${newYear}`;
     }
+
+    // 3. แมตช์ช่วงวันที่ที่ยังไม่มีปี เช่น 1-22/6
+    const rangeNoYear = trimmed.match(/^(\d{1,2}\s*[-–—]\s*\d{1,2})([-\/\.])(\d{1,2})$/);
+    if (rangeNoYear) {
+      return `${rangeNoYear[1]}${rangeNoYear[2]}${rangeNoYear[3].padStart(2, '0')}/${newYear}`;
+    }
+
+    // 4. แมตช์วันเดี่ยวที่ยังไม่มีปี เช่น 19/8
+    const dmNoYear = trimmed.match(/^(\d{1,2})([-\/\.])(\d{1,2})$/);
+    if (dmNoYear) {
+      return `${dmNoYear[1].padStart(2, '0')}${dmNoYear[2]}${dmNoYear[3].padStart(2, '0')}/${newYear}`;
+    }
+
     return dateStr;
   };
 
@@ -1641,11 +1700,11 @@ export default function ScanPage() {
                       {/* Date & EXP Date */}
                       <div className="grid grid-cols-2 gap-2 mb-2.5">
                         <div>
-                          <label className="text-[10px] font-semibold text-slate-500 block mb-0.5">วันที่ผลิต / นำเข้า</label>
+                          <label className="text-[10px] font-semibold text-slate-500 block mb-0.5">วันที่ / ช่วงวันที่จ่ายรวม</label>
                           <input
                             type="text"
                             value={row.date}
-                            placeholder="วว/ดด/ค.ศ."
+                            placeholder="วว/ดด/ค.ศ. หรือ วว-วว/ดด"
                             onChange={e => updateRow(row.id, 'date', e.target.value)}
                             onBlur={e => updateRow(row.id, 'date', normalizeDateToCE(e.target.value))}
                             className="w-full px-2.5 py-1.5 text-xs font-mono bg-slate-50 border border-slate-200 rounded-lg focus:bg-white focus:border-purple-500 outline-none"
@@ -1749,11 +1808,11 @@ export default function ScanPage() {
                             <input
                               type="text"
                               value={row.date}
-                              placeholder="วว/ดด/ค.ศ."
+                              placeholder="วว/ดด/ค.ศ. หรือ วว-วว/ดด"
                               onChange={e => updateRow(row.id, 'date', e.target.value)}
                               onBlur={e => updateRow(row.id, 'date', normalizeDateToCE(e.target.value))}
-                              className="w-24 px-2 py-1 bg-slate-50 hover:bg-white focus:bg-white border border-transparent hover:border-slate-200 focus:border-purple-500 rounded text-xs font-mono outline-none transition"
-                              title="วันที่ (ระบุเป็นปี ค.ศ. เช่น 07/08/2026)"
+                              className="w-28 px-2 py-1 bg-slate-50 hover:bg-white focus:bg-white border border-transparent hover:border-slate-200 focus:border-purple-500 rounded text-xs font-mono outline-none transition"
+                              title="วันที่หรือช่วงวันที่จ่ายรวม (เช่น 01-22/06/2026 หรือ 19/08/2026)"
                             />
                           </td>
                           {/* Lot */}
