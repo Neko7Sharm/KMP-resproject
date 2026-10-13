@@ -147,8 +147,8 @@ export default function ScanPage() {
     }
   };
 
-  // Read file → optimize on client (downscale to max 1280px + JPEG 80%) → store in ScanContext & auto scan
-  const processFile = useCallback(async (file: File, autoStart: boolean = true) => {
+  // Read file → optimize on client (downscale to max 1280px + JPEG 80%) → store in ScanContext & preview first
+  const processFile = useCallback(async (file: File, autoStart: boolean = false) => {
     if (!file.type.startsWith('image/')) { setErrorMsg('รองรับเฉพาะไฟล์รูปภาพ (JPG, PNG, WEBP)'); return; }
     if (file.size > 25 * 1024 * 1024) { setErrorMsg('ไฟล์ใหญ่เกิน 25MB กรุณาลดขนาดก่อนอัปโหลด'); return; }
     setErrorMsg(null); setCommitDone(false); setCommitStats(null);
@@ -184,14 +184,14 @@ export default function ScanPage() {
 
   const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
-    if (file) processFile(file, true);
+    if (file) processFile(file, false);
     e.target.value = '';
   };
 
   const handleDrop = (e: React.DragEvent) => {
     e.preventDefault(); setIsDragging(false);
     const file = e.dataTransfer.files?.[0];
-    if (file) processFile(file, true);
+    if (file) processFile(file, false);
   };
 
   // ── Clipboard Paste Handling (Ctrl+V and Button) ──
@@ -207,7 +207,7 @@ export default function ScanPage() {
         if (imageType) {
           const blob = await item.getType(imageType);
           const file = new File([blob], `clipboard_${Date.now()}.png`, { type: imageType });
-          processFile(file, true);
+          processFile(file, false);
           return;
         }
       }
@@ -237,7 +237,7 @@ export default function ScanPage() {
           const file = item.getAsFile();
           if (file) {
             e.preventDefault();
-            processFile(file, true);
+            processFile(file, false);
             break;
           }
         }
@@ -341,10 +341,8 @@ export default function ScanPage() {
       originalKB: sizeKB,
       optimizedKB: sizeKB,
     });
-
-    // เริ่มสแกนทันทีโดยไม่ต้องรอกดอีกรอบ
-    startScan(b64, 'image/jpeg');
-  }, [stopWebcam, setErrorMsg, setImageData, startScan]);
+    // ให้ผู้ใช้ดูตัวอย่างภาพถ่ายก่อน แล้วกดปุ่มตกลงเริ่มสแกนด้วยตนเอง
+  }, [stopWebcam, setErrorMsg, setImageData]);
 
   // Switch between rear & front camera
   const toggleFacingMode = useCallback(() => {
@@ -1150,20 +1148,43 @@ export default function ScanPage() {
               </div>
               {/* Analyze Button */}
               {!scanResult && (
-                <div className="p-4 border-t border-slate-100 bg-white">
-                  <button
-                    onClick={handleAnalyze}
-                    disabled={isAnalyzing || isOptimizing}
-                    className="w-full py-3 bg-purple-600 hover:bg-purple-700 disabled:opacity-60 text-white rounded-xl text-sm font-bold flex items-center justify-center gap-2 transition shadow-sm shadow-purple-200"
-                  >
-                    {isOptimizing ? (
-                      <><Loader2 className="w-4 h-4 animate-spin" />กำลังบีบอัดและเตรียมภาพ...</>
-                    ) : isAnalyzing ? (
-                      <><Loader2 className="w-4 h-4 animate-spin" />กำลังวิเคราะห์ภาพด้วย AI (รันในพื้นหลังได้)...</>
-                    ) : (
-                      <><ScanLine className="w-4 h-4" />วิเคราะห์ภาพด้วย AI</>
+                <div className="p-4 border-t border-slate-100 bg-white space-y-3">
+                  {!isAnalyzing && !isOptimizing && (
+                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-1 text-xs text-purple-900 bg-purple-50/80 border border-purple-200/80 px-3.5 py-2.5 rounded-xl">
+                      <span className="flex items-center gap-1.5 font-bold">
+                        <Eye className="w-4 h-4 text-purple-600 shrink-0" />
+                        ตรวจสอบความชัดเจนของภาพด้านบนเรียบร้อยแล้ว
+                      </span>
+                      <span className="text-[11px] text-purple-700">กดปุ่ม "ตกลงเริ่มสแกนด้วย AI" เมื่อพร้อม</span>
+                    </div>
+                  )}
+
+                  <div className="flex flex-col sm:flex-row items-center gap-2">
+                    {!isAnalyzing && !isOptimizing && (
+                      <button
+                        type="button"
+                        onClick={resetAll}
+                        className="w-full sm:w-auto px-4 py-3 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-xs sm:text-sm font-semibold transition shrink-0 active:scale-98"
+                        title="ยกเลิกภาพนี้แล้วเลือกภาพใหม่"
+                      >
+                        เลือกรูปใหม่
+                      </button>
                     )}
-                  </button>
+
+                    <button
+                      onClick={handleAnalyze}
+                      disabled={isAnalyzing || isOptimizing}
+                      className="w-full flex-1 py-3 bg-purple-600 hover:bg-purple-700 disabled:opacity-60 text-white rounded-xl text-sm font-bold flex items-center justify-center gap-2 transition shadow-md shadow-purple-200 active:scale-98"
+                    >
+                      {isOptimizing ? (
+                        <><Loader2 className="w-4 h-4 animate-spin" />กำลังเตรียมภาพ...</>
+                      ) : isAnalyzing ? (
+                        <><Loader2 className="w-4 h-4 animate-spin" />กำลังวิเคราะห์ภาพด้วย AI (รันในพื้นหลังได้)...</>
+                      ) : (
+                        <><ScanLine className="w-4 h-4" /> ตกลงเริ่มสแกนด้วย AI</>
+                      )}
+                    </button>
+                  </div>
                   {isAnalyzing && (
                     <div className="mt-4 p-4 bg-purple-50/70 border border-purple-100 rounded-xl space-y-2.5">
                       <div className="flex items-center justify-between text-xs">
