@@ -5,13 +5,14 @@ import { useState, useEffect } from 'react';
 import {
   Settings, KeyRound, CheckCircle2, AlertCircle, ExternalLink,
   Eye, EyeOff, Save, RefreshCw, Loader2, Info, Database, ChevronRight,
-  Users, UserCheck
+  Users, UserCheck, Trash2
 } from 'lucide-react';
 
 export default function SettingsPage() {
   const [apiKey, setApiKey] = useState('');
   const [showKey, setShowKey] = useState(false);
   const [keyPreview, setKeyPreview] = useState<string | null>(null);
+  const [keysList, setKeysList] = useState<string[]>([]);
   const [hasKey, setHasKey] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
@@ -26,6 +27,7 @@ export default function SettingsPage() {
       const data = await res.json();
       setHasKey(data.hasApiKey);
       setKeyPreview(data.preview || null);
+      setKeysList(data.keys || []);
     } catch (e) {}
     finally { setIsLoading(false); }
   }
@@ -49,10 +51,28 @@ export default function SettingsPage() {
       setKeyPreview(data.preview);
       setHasKey(true);
       setApiKey('');
+      fetchStatus();
     } catch (e: any) {
       setMessage({ type: 'error', text: e.message });
     } finally {
       setIsSaving(false);
+    }
+  }
+
+  async function handleDeleteKey(specificKey?: string) {
+    if (!window.confirm(specificKey ? `ต้องการลบ API Key ${specificKey} ใช่หรือไม่?` : 'ต้องการลบ API Key สำรองทั้งหมดในระบบใช่หรือไม่?')) return;
+    try {
+      const res = await fetch('/api/settings/apikey', {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ apiKey: specificKey }),
+      });
+      if (res.ok) {
+        fetchStatus();
+        setMessage({ type: 'info', text: specificKey ? `ลบ ${specificKey} เรียบร้อยแล้ว` : 'ลบคีย์สำรองทั้งหมดเรียบร้อยแล้ว' });
+      }
+    } catch (e: any) {
+      setMessage({ type: 'error', text: e.message });
     }
   }
 
@@ -132,16 +152,47 @@ export default function SettingsPage() {
         </div>
 
         <div className="p-6 space-y-5">
-          {/* Current status */}
-          {hasKey && keyPreview && (
-            <div className="p-3 bg-emerald-50 border border-emerald-100 rounded-xl flex items-center gap-2 text-sm">
-              <CheckCircle2 className="w-4 h-4 text-emerald-500 shrink-0" />
-              <span className="text-emerald-800">
-                API Key ปัจจุบัน: <code className="font-mono font-bold">{keyPreview}</code>
-              </span>
-              <button onClick={fetchStatus} className="ml-auto text-emerald-600 hover:text-emerald-800">
-                <RefreshCw className="w-3.5 h-3.5" />
-              </button>
+          {/* รายการ API Key สำรองในระบบ */}
+          {keysList.length > 0 && (
+            <div className="space-y-2">
+              <div className="flex items-center justify-between text-xs font-semibold text-slate-700">
+                <span>🔑 คลัง API Key สำรองในระบบ ({keysList.length} คีย์):</span>
+                <button
+                  type="button"
+                  onClick={() => handleDeleteKey()}
+                  className="text-rose-600 hover:text-rose-700 text-[11px] underline font-medium cursor-pointer"
+                >
+                  ลบทั้งหมด
+                </button>
+              </div>
+              <div className="space-y-1.5">
+                {keysList.map((k, idx) => (
+                  <div
+                    key={idx}
+                    className="p-2.5 bg-purple-50/70 border border-purple-100 rounded-xl flex items-center justify-between text-xs"
+                  >
+                    <div className="flex items-center gap-2">
+                      <span className="w-5 h-5 rounded-full bg-purple-200 text-purple-800 text-[10px] font-bold flex items-center justify-center">
+                        {idx + 1}
+                      </span>
+                      <code className="font-mono font-bold text-purple-950">{k}</code>
+                      {idx === keysList.length - 1 && (
+                        <span className="text-[10px] bg-purple-200/80 text-purple-800 px-1.5 py-0.5 rounded font-medium">
+                          ล่าสุด (เรียกก่อน)
+                        </span>
+                      )}
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => handleDeleteKey(k)}
+                      title="ลบคีย์นี้"
+                      className="text-slate-400 hover:text-rose-600 p-1 transition cursor-pointer"
+                    >
+                      <Trash2 className="w-4 h-4" />
+                    </button>
+                  </div>
+                ))}
+              </div>
             </div>
           )}
 
@@ -154,7 +205,7 @@ export default function SettingsPage() {
             <ol className="text-xs text-blue-700 space-y-1 list-decimal list-inside">
               <li>ไปที่ <a href="https://aistudio.google.com/app/apikey" target="_blank" rel="noopener noreferrer" className="underline font-semibold inline-flex items-center gap-0.5">Google AI Studio <ExternalLink className="w-3 h-3" /></a></li>
               <li>กด <strong>"Create API key"</strong> แล้วเลือก Project</li>
-              <li>คัดลอก Key มาวางในช่องด้านล่างแล้วกด <strong>บันทึก</strong> (ระบบจะตรวจสอบ key ให้ก่อนบันทึก)</li>
+              <li>คัดลอก Key มาวางในช่องด้านล่างแล้วกด <strong>เพิ่ม API Key สำรอง</strong> (ระบบจะเพิ่มต่อท้าย ไม่ลบคีย์เดิม)</li>
               <li>ใช้งานได้ทันที ไม่ต้องเริ่มเซิร์ฟเวอร์ใหม่</li>
             </ol>
           </div>
@@ -162,7 +213,7 @@ export default function SettingsPage() {
           {/* Input form */}
           <form onSubmit={handleSave} className="space-y-3">
             <label className="block text-xs font-semibold text-slate-700">
-              {hasKey ? 'อัปเดต API Key ใหม่' : 'ใส่ Gemini API Key'}
+              เพิ่ม Gemini API Key สำรอง (เพิ่มต่อท้าย ไม่ทับอันเดิม)
             </label>
             <div className="relative">
               <input
@@ -175,7 +226,7 @@ export default function SettingsPage() {
               <button
                 type="button"
                 onClick={() => setShowKey(!showKey)}
-                className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600"
+                className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 cursor-pointer"
               >
                 {showKey ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
               </button>
@@ -195,9 +246,9 @@ export default function SettingsPage() {
             <button
               type="submit"
               disabled={isSaving || !apiKey.trim()}
-              className="w-full py-2.5 bg-purple-600 hover:bg-purple-700 disabled:opacity-50 text-white rounded-xl text-sm font-bold flex items-center justify-center gap-2 transition"
+              className="w-full py-2.5 bg-purple-600 hover:bg-purple-700 disabled:opacity-50 text-white rounded-xl text-sm font-bold flex items-center justify-center gap-2 transition cursor-pointer shadow-xs"
             >
-              {isSaving ? <><Loader2 className="w-4 h-4 animate-spin" />กำลังบันทึก...</> : <><Save className="w-4 h-4" />บันทึก API Key</>}
+              {isSaving ? <><Loader2 className="w-4 h-4 animate-spin" />กำลังตรวจสอบและบันทึก...</> : <><Save className="w-4 h-4" />เพิ่มเป็น API Key สำรอง</>}
             </button>
           </form>
 

@@ -1,6 +1,7 @@
 import prisma from './prisma';
 
 export const SHARED_KEY_SETTING = 'GEMINI_SHARED_API_KEY';
+export const SHARED_KEYS_LIST_SETTING = 'GEMINI_SHARED_API_KEYS';
 
 export interface GeminiKeyEntry {
   key: string;
@@ -19,30 +20,145 @@ export function getSystemKeys(): string[] {
   return keys;
 }
 
-/** key กลางที่ผู้ใช้ใส่เก็บไว้ใน DB (ใช้ร่วมกันทุกคน) */
-export async function getSharedKey(): Promise<string | null> {
+/** ดึงรายชื่อ key กลาง/สำรองทั้งหมดที่เก็บไว้ใน DB (คืนค่าเป็น array ของ keys ทั้งหมด) */
+export async function getSharedKeys(): Promise<string[]> {
   try {
-    const row = await prisma.appSetting.findUnique({ where: { key: SHARED_KEY_SETTING } });
-    const v = row?.value?.trim();
-    return v ? v : null;
-  } catch {
-    return null;
+    const rows = await prisma.appSetting.findMany({
+      where: {
+        OR: [
+          { key: SHARED_KEY_SETTING },
+          { key: SHARED_KEYS_LIST_SETTING },
+          { key: { startsWith: 'GEMINI_SHARED_KEY_' } },
+        ],
+      },
+    });
+
+    const keysSet = new Set<string>();
+
+    for (const row of rows) {
+      if (row.key === SHARED_KEYS_LIST_SETTING) {
+        try {
+          const parsed = JSON.parse(row.value);
+          if (Array.isArray(parsed)) {
+            parsed.forEach((k) => {
+              if (typeof k === 'string' && k.trim()) keysSet.add(k.trim());
+            });
+          }
+        } catch {
+          // ignore parse error
+        }
+      } else {
+        const v = row.value?.trim();
+        if (v) keysSet.add(v);
+      }
+    }
+
+    return Array.from(keysSet);
+  } catch (err) {
+    console.error('getSharedKeys error:', err);
+    return [];
   }
 }
 
-/** ลำดับการใช้งาน: key กลางที่ผู้ใช้ตั้งใน DB ก่อน (ได้รับการทดสอบแล้ว) ตามด้วย key ระบบ (env) ที่ไม่ซ้ำกัน */
+/** key กลางตัวล่าสุดที่เก็บไว้ใน DB (เพื่อความเข้ากันได้กับโค้ดเดิม) */
+export async function getSharedKey(): Promise<string | null> {
+  const keys = await getSharedKeys();
+  return keys.length > 0 ? keys[keys.length - 1] : null;
+}
+
+/** บันทึก/เพิ่ม key ใหม่เข้าไปใน DB แบบต่อท้ายเป็นคีย์สำรอง (ไม่ทับอันเดิม) */
+export async function addSharedKey(newKey: string): Promise<{ added: boolean; totalKeys: number }> {
+  const clean = newKey.trim();
+  if (!clean) return { added: false, totalKeys: 0 };
+
+  const currentKeys = await getSharedKeys();
+  if (!currentKeys.includes(clean)) {
+    currentKeys.push(clean);
+  }
+
+  // บันทึกรายการคีย์ทั้งหมดลงใน GEMINI_SHARED_KEYS_LIST_SETTING (JSON array)
+  await prisma.appSetting.upsert({
+    where: { key: SHARED_KEYS_LIST_SETTING },
+    update: { value: JSON.stringify(currentKeys) },
+    create: { key: SHARED_KEYS_LIST_SETTING, value: JSON.stringify(currentKeys) },
+  });
+
+  // บันทึกคีย์ล่าสุดไว้ใน SHARED_KEY_SETTING เพื่อ backward compatibility
+  await prisma.appSetting.upsert({
+    where: { key: SHARED_KEY_SETTING },
+    update: { value: clean },
+    create: { key: SHARED_KEY_SETTING, value: clean },
+  });
+
+  return { added: true, totalKeys: currentKeys.length };
+}
+
+/** ลบ key กลางออกจาก DB (ถ้าไม่ระบุ specificKey จะลบทั้งหมด) */
+export async function removeSharedKey(specificKey?: string): Promise<{ remainingKeys: number }> {
+  if (!specificKey) {
+    await prisma.appSetting.deleteMany({
+      where: {
+        OR: [
+          { key: SHARED_KEY_SETTING },
+          { key: SHARED_KEYS_LIST_SETTING },
+          { key: { startsWith: 'GEMINI_SHARED_KEY_' } },
+        ],
+      },
+    });
+    return { remainingKeys: 0 };
+  }
+
+  const currentKeys = await getSharedKeys();
+  const filtered = currentKeys.filter((k) => k !== specificKey.trim());
+
+  await prisma.appSetting.upsert({
+    where: { key: SHARED_KEYS_LIST_SETTING },
+    update: { value: JSON.stringify(filtered) },
+    create: { key: SHARED_KEYS_LIST_SETTING, value: JSON.stringify(filtered) },
+  });
+
+  if (filtered.length > 0) {
+    await prisma.appSetting.upsert({
+      where: { key: SHARED_KEY_SETTING },
+      update: { value: filtered[filtered.length - 1] },
+      create: { key: SHARED_KEY_SETTING, value: filtered[filtered.length - 1] },
+    });
+  } else {
+    await prisma.appSetting.deleteMany({
+      where: {
+        OR: [
+          { key: SHARED_KEY_SETTING },
+          { key: SHARED_KEYS_LIST_SETTING },
+          { key: { startsWith: 'GEMINI_SHARED_KEY_' } },
+        ],
+      },
+    });
+  }
+
+  return { remainingKeys: filtered.length };
+}
+
+/** ลำดับการใช้งาน: คีย์สำรองใน DB ทั้งหมด (คีย์ที่เพิ่มล่าสุดอยู่ก่อน) ตามด้วย key ระบบ (env) */
 export async function getAllKeys(): Promise<GeminiKeyEntry[]> {
   const entries: GeminiKeyEntry[] = [];
-  const shared = await getSharedKey();
-  if (shared && shared.trim()) {
-    entries.push({ key: shared.trim(), source: 'shared' });
+  const sharedKeys = await getSharedKeys();
+
+  // ใส่คีย์สำรองใน DB เรียงจากล่าสุดไปอันแรก
+  for (let i = sharedKeys.length - 1; i >= 0; i--) {
+    const k = sharedKeys[i];
+    if (k && !entries.some((e) => e.key === k)) {
+      entries.push({ key: k, source: 'shared' });
+    }
   }
+
+  // ตามด้วย key ระบบจาก Environment Variables
   const systemKeys = getSystemKeys();
   for (const sysKey of systemKeys) {
     if (sysKey && !entries.some((e) => e.key === sysKey)) {
       entries.push({ key: sysKey, source: 'system' });
     }
   }
+
   return entries;
 }
 

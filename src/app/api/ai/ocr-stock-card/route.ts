@@ -102,10 +102,10 @@ async function analyzeImageWithGemini(
   let sawTimeout = false;
 
   const startTime = Date.now();
-  const MAX_TOTAL_BUDGET_MS = 8500; // ตัดจบส่ง error สวยๆ ก่อน Vercel 10s timeout ตัดสัญญาณ (504)
-  const PER_MODEL_TIMEOUT_MS = 4500; // แต่ละโมเดลให้เวลาสูงสุด 4.5 วินาที หากค้างให้รีบสลับโมเดลถัดไปทันที
+  const MAX_TOTAL_BUDGET_MS = 28000; // เพดานเวลารวม (ให้เวลาเพียงพอสำหรับสลับคีย์และโมเดลสำรอง)
+  const PER_MODEL_TIMEOUT_MS = 14000; // ให้เวลาแต่ละโมเดลสูงสุด 14 วินาที เพื่อให้อ่านลายมือและตารางเสร็จสมบูรณ์
 
-  // Outer loop: key ระบบก่อน แล้วค่อย key กลางใน DB
+  // Outer loop: คีย์สำรองใน DB (คีย์ล่าสุดก่อน) แล้วตามด้วยคีย์ระบบ (env)
   for (const entry of apiKeys) {
     if (Date.now() - startTime > MAX_TOTAL_BUDGET_MS) {
       sawTimeout = true;
@@ -123,7 +123,7 @@ async function analyzeImageWithGemini(
         break;
       }
 
-      const remainingBudget = Math.max(1500, MAX_TOTAL_BUDGET_MS - elapsed);
+      const remainingBudget = Math.max(3000, MAX_TOTAL_BUDGET_MS - elapsed);
       const callTimeoutMs = Math.min(PER_MODEL_TIMEOUT_MS, remainingBudget);
 
       try {
