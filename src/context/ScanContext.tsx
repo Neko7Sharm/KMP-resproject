@@ -128,13 +128,17 @@ export function ScanProvider({ children }: { children: React.ReactNode }) {
 
       if (progressIntervalRef.current) clearInterval(progressIntervalRef.current);
 
+      let elapsedCount = 0;
       let currentPct = 10;
       progressIntervalRef.current = setInterval(() => {
-        currentPct += Math.floor(Math.random() * 8) + 4;
-        if (currentPct > 92) currentPct = 92;
+        elapsedCount++;
+        currentPct += Math.floor(Math.random() * 5) + 2;
+        if (currentPct > 94) currentPct = 94;
         setAnalyzeProgress(currentPct);
 
-        if (currentPct < 30) {
+        if (elapsedCount > 20) {
+          setAnalyzeStepText('กำลังวิเคราะห์ตารางและสกัดลายมือภาษาไทยอย่างละเอียด...');
+        } else if (currentPct < 30) {
           setAnalyzeStepText('กำลังประมวลผลรูปภาพ...');
         } else if (currentPct < 60) {
           setAnalyzeStepText('Gemini AI กำลังตรวจจับตารางและลายมือภาษาไทย...');
@@ -143,7 +147,7 @@ export function ScanProvider({ children }: { children: React.ReactNode }) {
         } else {
           setAnalyzeStepText('กำลังจัดรูปแบบ JSON และตรวจสอบปี ค.ศ....');
         }
-      }, 450);
+      }, 500);
 
       try {
         const res = await fetch('/api/ai/ocr-stock-card', {

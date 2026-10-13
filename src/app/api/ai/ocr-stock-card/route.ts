@@ -102,8 +102,8 @@ async function analyzeImageWithGemini(
   let sawTimeout = false;
 
   const startTime = Date.now();
-  const MAX_TOTAL_BUDGET_MS = 28000; // เพดานเวลารวม (ให้เวลาเพียงพอสำหรับสลับคีย์และโมเดลสำรอง)
-  const PER_MODEL_TIMEOUT_MS = 14000; // ให้เวลาแต่ละโมเดลสูงสุด 14 วินาที เพื่อให้อ่านลายมือและตารางเสร็จสมบูรณ์
+  const MAX_TOTAL_BUDGET_MS = 50000; // เพดานเวลารวม 50 วินาที (ให้อ่านเอกสารจนเสร็จสมบูรณ์ และมีเวลาสลับคีย์สำรอง)
+  const PER_MODEL_TIMEOUT_MS = 25000; // ให้เวลาแต่ละโมเดลสูงสุด 25 วินาที เพื่อให้อ่านลายมือและตารางยาวได้จนครบถ้วน
 
   // Outer loop: คีย์สำรองใน DB (คีย์ล่าสุดก่อน) แล้วตามด้วยคีย์ระบบ (env)
   for (const entry of apiKeys) {
@@ -123,7 +123,7 @@ async function analyzeImageWithGemini(
         break;
       }
 
-      const remainingBudget = Math.max(3000, MAX_TOTAL_BUDGET_MS - elapsed);
+      const remainingBudget = Math.max(5000, MAX_TOTAL_BUDGET_MS - elapsed);
       const callTimeoutMs = Math.min(PER_MODEL_TIMEOUT_MS, remainingBudget);
 
       try {
