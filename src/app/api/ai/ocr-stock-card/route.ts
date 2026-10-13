@@ -32,12 +32,17 @@ async function analyzeImageWithGemini(
     throw new AIError('NO_KEY', 'ยังไม่มี Gemini API Key ในระบบ', true);
   }
 
-  // โมเดล vision ที่เร็วที่สุดและแม่นยำสูง (จัดเรียงตัวที่เร็วที่สุดไว้หน้าสุดเพื่อหลีกเลี่ยง Gateway Timeout)
+  // จัดเรียงโมเดลตามความเร็วสูงสุดเพื่อให้อยู่ในกรอบเวลา Serverless Function (< 10s)
+  // จากผลทดสอบจริง (Benchmark):
+  // 1. gemini-3.5-flash-lite: ~1.5 วินาที (เร็วที่สุด เสถียรสูง แม่นยำ)
+  // 2. gemini-flash-lite-latest: ~1.9 วินาที (ตัวสำรองความเร็วสูง)
+  // 3. gemini-3.6-flash: ~2.0 - 4.5 วินาที
+  // 4. gemini-3.7-flash: ตัวสำรองความสามารถสูง (แต่ใช้เวลา ~7-14s)
   const candidateModels = [
-    'gemini-3.7-flash',         // เร็วที่สุด (~2.2 วินาที, คลัสเตอร์ใหม่ล่าสุด)
-    'gemini-3.5-flash',         // เสถียรสูง (~3.5 วินาที)
-    'gemini-3.5-flash-lite',    // ประหยัดโควตา (~3.5-10 วินาที)
-    'gemini-flash-lite-latest', // ตัวสำรอง
+    'gemini-3.5-flash-lite',
+    'gemini-flash-lite-latest',
+    'gemini-3.6-flash',
+    'gemini-3.7-flash',
   ];
 
   const prompt = `คุณเป็นผู้เชี่ยวชาญอ่านเอกสารใบสต็อกการ์ดคลังสินค้า (Stock Card / FR 1-6) ลายมือภาษาไทยและตัวเลข
@@ -94,38 +99,62 @@ async function analyzeImageWithGemini(
   const failures: { source: 'system' | 'shared'; kind: 'quota' | 'invalid' }[] = [];
   let sawOverload = false;
   let sawBadOutput = false;
+  let sawTimeout = false;
 
-  const MAX_RETRIES = 2; // ลองซ้ำอัตโนมัติหากติด 503 Overload ชั่วขณะ
-  let attempt = 0;
+  const startTime = Date.now();
+  const MAX_TOTAL_BUDGET_MS = 8500; // ตัดจบส่ง error สวยๆ ก่อน Vercel 10s timeout ตัดสัญญาณ (504)
+  const PER_MODEL_TIMEOUT_MS = 4500; // แต่ละโมเดลให้เวลาสูงสุด 4.5 วินาที หากค้างให้รีบสลับโมเดลถัดไปทันที
 
-  while (attempt < MAX_RETRIES) {
-    attempt++;
-    sawOverload = false;
+  // Outer loop: key ระบบก่อน แล้วค่อย key กลางใน DB
+  for (const entry of apiKeys) {
+    if (Date.now() - startTime > MAX_TOTAL_BUDGET_MS) {
+      sawTimeout = true;
+      break;
+    }
 
-    // Outer loop: key ระบบก่อน แล้วค่อย key กลางใน DB
-    for (const entry of apiKeys) {
-      const genAI = new GoogleGenerativeAI(entry.key);
-      let keyFailed = false;
+    const genAI = new GoogleGenerativeAI(entry.key);
+    let keyFailed = false;
 
-      // Inner loop: ลองทีละโมเดลด้วย key นี้
-      for (const modelName of candidateModels) {
+    // Inner loop: ลองทีละโมเดลด้วย key นี้
+    for (const modelName of candidateModels) {
+      const elapsed = Date.now() - startTime;
+      if (elapsed > MAX_TOTAL_BUDGET_MS) {
+        sawTimeout = true;
+        break;
+      }
+
+      const remainingBudget = Math.max(1500, MAX_TOTAL_BUDGET_MS - elapsed);
+      const callTimeoutMs = Math.min(PER_MODEL_TIMEOUT_MS, remainingBudget);
+
+      try {
+        const model = genAI.getGenerativeModel({
+          model: modelName,
+          generationConfig: {
+            temperature: 0.1,
+            responseMimeType: 'application/json',
+            maxOutputTokens: 2048,
+          },
+          safetySettings: [
+            { category: HarmCategory.HARM_CATEGORY_HARASSMENT, threshold: HarmBlockThreshold.BLOCK_NONE },
+            { category: HarmCategory.HARM_CATEGORY_HATE_SPEECH, threshold: HarmBlockThreshold.BLOCK_NONE },
+          ],
+        });
+
+        let timeoutHandle: any;
+        const timeoutPromise = new Promise<never>((_, reject) => {
+          timeoutHandle = setTimeout(
+            () => reject(new Error('MODEL_TIMEOUT: เซิร์ฟเวอร์โมเดลใช้เวลานานเกินกำหนด')),
+            callTimeoutMs
+          );
+        });
+
         try {
-          const model = genAI.getGenerativeModel({
-            model: modelName,
-            generationConfig: {
-              temperature: 0.1,
-              responseMimeType: 'application/json',
-              maxOutputTokens: 2500,
-            },
-            safetySettings: [
-              { category: HarmCategory.HARM_CATEGORY_HARASSMENT, threshold: HarmBlockThreshold.BLOCK_NONE },
-              { category: HarmCategory.HARM_CATEGORY_HATE_SPEECH, threshold: HarmBlockThreshold.BLOCK_NONE },
-            ],
-          });
+          const result = await Promise.race([
+            model.generateContent([prompt, imagePart]),
+            timeoutPromise,
+          ]);
 
-          const result = await model.generateContent([prompt, imagePart]);
           const text = result.response.text().trim();
-
           const jsonStr = text
             .replace(/^```json\s*/i, '')
             .replace(/^```\s*/i, '')
@@ -138,47 +167,49 @@ async function analyzeImageWithGemini(
             usedModel: modelName,
             usedKeySource: entry.source,
           };
-        } catch (err: any) {
-          lastError = err;
-          const msg: string = String(err?.message || '');
+        } finally {
+          clearTimeout(timeoutHandle);
+        }
+      } catch (err: any) {
+        lastError = err;
+        const msg: string = String(err?.message || '');
 
-          const isInvalidKey = /API key not valid|API_KEY_INVALID|API key expired|PERMISSION_DENIED|\[40[013]/i.test(msg);
-          const isQuota = /\[429|429 |quota|RESOURCE_EXHAUSTED|rate limit/i.test(msg);
-          const isModelGone = /\[404|404 |no longer available|is not found/i.test(msg);
-          const isOverload = /\[503|503 |high demand|overloaded|UNAVAILABLE/i.test(msg);
+        const isTimeout = /MODEL_TIMEOUT|timeout|aborted|ETIMEDOUT/i.test(msg);
+        const isInvalidKey = /API key not valid|API_KEY_INVALID|API key expired|PERMISSION_DENIED|\[40[013]/i.test(msg);
+        const isQuota = /\[429|429 |quota|RESOURCE_EXHAUSTED|rate limit/i.test(msg);
+        const isModelGone = /\[404|404 |no longer available|is not found/i.test(msg);
+        const isOverload = /\[503|503 |high demand|overloaded|UNAVAILABLE/i.test(msg);
 
-          if (isInvalidKey) {
-            failures.push({ source: entry.source, kind: 'invalid' });
-            keyFailed = true;
-            break;
-          }
-          if (isQuota) {
-            console.warn(`Gemini key (${entry.source}) quota/rate limited, switching to next key...`);
-            failures.push({ source: entry.source, kind: 'quota' });
-            keyFailed = true;
-            break;
-          }
-          if (isModelGone) {
-            console.warn(`Model ${modelName} unavailable (404), trying next model...`);
-            continue; // ข้ามไปโมเดลถัดไปทันที
-          }
-          if (isOverload) {
-            sawOverload = true;
-            console.warn(`Model ${modelName} overloaded (503), switching to next model cluster...`);
-            continue; // โมเดลคนใช้เยอะ ข้ามไปโมเดลถัดไปทันที
-          }
-          if (err instanceof SyntaxError) sawBadOutput = true;
+        if (isTimeout) {
+          sawTimeout = true;
+          console.warn(`Model ${modelName} timed out (> ${callTimeoutMs}ms), switching to next model...`);
           continue;
         }
+        if (isInvalidKey) {
+          failures.push({ source: entry.source, kind: 'invalid' });
+          keyFailed = true;
+          break;
+        }
+        if (isQuota) {
+          console.warn(`Gemini key (${entry.source}) quota/rate limited, switching to next key...`);
+          failures.push({ source: entry.source, kind: 'quota' });
+          keyFailed = true;
+          break;
+        }
+        if (isModelGone) {
+          console.warn(`Model ${modelName} unavailable (404), trying next model...`);
+          continue;
+        }
+        if (isOverload) {
+          sawOverload = true;
+          console.warn(`Model ${modelName} overloaded (503), switching to next model cluster...`);
+          continue;
+        }
+        if (err instanceof SyntaxError) sawBadOutput = true;
+        continue;
       }
-      if (keyFailed) continue;
     }
-
-    // หากพบ 503 Overload ชั่วขณะ และยังมีสิทธิ์ retry ให้รอ 1.5 วินาทีแล้วลองใหม่
-    if (sawOverload && attempt < MAX_RETRIES) {
-      console.warn(`All models/keys overloaded on attempt ${attempt}. Waiting 1.5s before retry...`);
-      await new Promise((r) => setTimeout(r, 1500));
-    }
+    if (keyFailed) continue;
   }
 
   // ทุก key/โมเดลล้มเหลว → ส่ง error แบบมีชนิด ให้หน้าเว็บตัดสินใจ
@@ -189,6 +220,13 @@ async function analyzeImageWithGemini(
       last.kind === 'quota' ? 'API Key หมดโควตาหรือถูกจำกัดการใช้งาน' : 'API Key ไม่ถูกต้องหรือหมดอายุ',
       true,
       last.source
+    );
+  }
+  if (sawTimeout) {
+    throw new AIError(
+      'AI_TIMEOUT',
+      'AI ประมวลผลนานเกินกำหนดชั่วคราว กรุณากด "ลองสแกนอีกครั้ง" หรือใส่ Gemini API Key ส่วนตัว',
+      false
     );
   }
   if (sawOverload) {
