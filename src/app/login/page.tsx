@@ -1,7 +1,7 @@
 'use client';
 
-import React, { useState, useEffect } from 'react';
-import { useRouter, useSearchParams } from 'next/navigation';
+import React, { useState } from 'react';
+import { useSearchParams } from 'next/navigation';
 import {
   Package,
   Lock,
@@ -31,24 +31,20 @@ export default function LoginPage() {
 }
 
 function LoginForm() {
-  const router = useRouter();
   const searchParams = useSearchParams();
-  const nextUrl = searchParams.get('next') || '/';
+  const rawNext = searchParams.get('next');
+  // ป้องกัน redirect loop กลับไป /login หรือ URL ภายนอก
+  const nextUrl = (!rawNext || rawNext === '/login' || !rawNext.startsWith('/') || rawNext.startsWith('//'))
+    ? '/'
+    : rawNext;
 
-  const { user, loading: authLoading, refreshUser } = useAuth();
+  const { user } = useAuth();
 
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-
-  // If already logged in, redirect
-  useEffect(() => {
-    if (!authLoading && user) {
-      router.replace(nextUrl);
-    }
-  }, [user, authLoading, router, nextUrl]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -78,9 +74,8 @@ function LoginForm() {
         return;
       }
 
-      await refreshUser();
-      router.replace(nextUrl);
-      router.refresh();
+      // Hard navigation เพื่อโหลด Cookie ใหม่ให้ Next.js Server Components & Middleware ทำงานสมบูรณ์ 100%
+      window.location.assign(nextUrl);
     } catch (err: any) {
       setError(err.message || 'เกิดข้อผิดพลาดในการเชื่อมต่อเซิร์ฟเวอร์');
       setIsLoading(false);
@@ -120,6 +115,25 @@ function LoginForm() {
               กรุณาเข้าสู่ระบบด้วยชื่อผู้ใช้และรหัสผ่านของคุณ
             </p>
           </div>
+
+          {/* Banner แสดงสถานะหากมีผู้ใช้อยู่แล้วแต่ต้องการสลับบัญชี */}
+          {user && (
+            <div className="mb-5 p-3.5 bg-purple-500/20 border border-purple-500/40 rounded-2xl flex items-center justify-between text-xs text-purple-200">
+              <div className="flex items-center gap-2">
+                <CheckCircle2 className="w-4 h-4 text-purple-400 shrink-0" />
+                <span>
+                  ใช้งานอยู่ในชื่อ: <strong>{user.name}</strong>
+                </span>
+              </div>
+              <button
+                type="button"
+                onClick={() => window.location.assign(nextUrl)}
+                className="px-2.5 py-1 bg-white/15 hover:bg-white/25 rounded-lg text-white font-semibold transition cursor-pointer"
+              >
+                ไปหน้าหลัก →
+              </button>
+            </div>
+          )}
 
           {error && (
             <div className="mb-5 p-3.5 bg-rose-500/20 border border-rose-500/40 rounded-xl flex items-start gap-2.5 text-xs text-rose-200">

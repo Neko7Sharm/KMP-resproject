@@ -102,11 +102,8 @@ export async function middleware(req: NextRequest) {
     }
   }
 
-  // 2. If already logged in and visiting /login -> redirect to /
+  // 2. Allow visiting /login freely (so users can login or switch accounts)
   if (pathname === '/login') {
-    if (decodedUser) {
-      return NextResponse.redirect(new URL('/', req.url));
-    }
     return NextResponse.next();
   }
 

@@ -111,10 +111,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       console.error('Logout error:', e);
     } finally {
       setUser(null);
-      router.push('/login');
-      router.refresh();
+      window.location.assign('/login');
     }
-  }, [router]);
+  }, []);
 
   const role = user?.role || null;
   const isAdmin = role === 'ADMIN';

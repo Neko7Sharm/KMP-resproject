@@ -76,11 +76,14 @@ export async function POST(req: NextRequest) {
     });
 
     // Set HttpOnly session cookie (30 days)
+    // Dynamically detect HTTPS so cookies work both on local HTTP and production HTTPS
+    const isHttps = req.headers.get('x-forwarded-proto') === 'https' || req.nextUrl.protocol === 'https:';
+
     response.cookies.set({
       name: COOKIE_NAME,
       value: token,
       httpOnly: true,
-      secure: process.env.NODE_ENV === 'production',
+      secure: isHttps,
       sameSite: 'lax',
       path: '/',
       maxAge: 30 * 24 * 60 * 60,
